@@ -1,6 +1,7 @@
 import json
 import uuid
 
+from .providers import ProviderResult
 from .schema import fallback_response, validate_assistant_response
 
 
@@ -12,7 +13,18 @@ class ConversationCore:
 
     def send(self, user_text, conversation_id="default", request_id=None):
         request_id = request_id or str(uuid.uuid4())
-        raw_response = self.provider.generate(user_text, self.history[-self.max_history_turns :])
+        result = self.provider.generate(
+            user_text, self.history[-self.max_history_turns :]
+        )
+
+        if isinstance(result, ProviderResult):
+            raw_response = result.raw_response
+            provider_name = result.provider_name
+            latency_ms = result.latency_ms
+        else:
+            raw_response = result
+            provider_name = getattr(self.provider, "name", "unknown")
+            latency_ms = None
 
         try:
             parsed = json.loads(raw_response)
@@ -31,6 +43,8 @@ class ConversationCore:
             "assistant": assistant,
             "valid": valid,
             "error": error,
+            "provider": provider_name,
+            "latency_ms": latency_ms,
         }
         self.history.append(turn)
 
