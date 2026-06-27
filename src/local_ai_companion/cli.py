@@ -11,10 +11,12 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Local AI Companion conversation CLI")
     parser.add_argument("--config", help="Path to JSON config file")
     parser.add_argument("--message", help="Single user message")
+    parser.add_argument("--conversation-id", help="Conversation session ID")
+    parser.add_argument("--request-id", help="Request ID for tracing")
     return parser
 
 
-def run_once(config, message):
+def run_once(config, conversation_id, request_id, message):
     provider = create_provider(config.llm.provider)
     core = ConversationCore(
         provider=provider,
@@ -22,13 +24,14 @@ def run_once(config, message):
     )
     response = core.send(
         message,
-        conversation_id=config.conversation.default_conversation_id,
+        conversation_id=conversation_id,
+        request_id=request_id,
     )
     print(json.dumps(response, ensure_ascii=False, indent=2))
     return 0
 
 
-def run_repl(config):
+def run_repl(config, conversation_id):
     provider = create_provider(config.llm.provider)
     core = ConversationCore(
         provider=provider,
@@ -49,7 +52,7 @@ def run_repl(config):
 
         response = core.send(
             user_text,
-            conversation_id=config.conversation.default_conversation_id,
+            conversation_id=conversation_id,
         )
         print(json.dumps(response, ensure_ascii=False, indent=2))
 
@@ -59,9 +62,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = load_config(args.config)
 
+    conversation_id = args.conversation_id or config.conversation.default_conversation_id
+
     if args.message:
-        return run_once(config, args.message)
-    return run_repl(config)
+        return run_once(config, conversation_id, args.request_id, args.message)
+    return run_repl(config, conversation_id)
 
 
 if __name__ == "__main__":
