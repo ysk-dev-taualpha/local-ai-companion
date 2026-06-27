@@ -1,6 +1,6 @@
 # Local AI Companion
 
-ローカル環境で動作する常駐AIアシスタントを段階的に開発するプロジェクト。
+ローカル環境で動作する常駐AIアシスタントを、段階的に開発するプロジェクトです。
 
 ## Start Here
 
@@ -12,16 +12,17 @@
 - Decision log: [docs/decisions.md](docs/decisions.md)
 - Collaboration guide: [docs/collaboration.md](docs/collaboration.md)
 - Git workflow: [docs/git_workflow.md](docs/git_workflow.md)
+- Project management: [docs/project_management.md](docs/project_management.md)
 
 ## Current Target
 
 v0.1: Python Conversation Core
 
-Text input should produce a stable assistant response JSON:
+テキスト入力に対して、安定した assistant response JSON を返す会話コアを作ります。
 
 ```json
 {
-  "text": "返答本文",
+  "text": "今日は何から始めますか？",
   "emotion": "neutral",
   "motion": "idle",
   "speak_style": "normal",
