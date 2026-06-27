@@ -209,7 +209,7 @@ Review should prioritize:
 
 When GitHub or MCP integration is introduced, use a fine-grained personal access token scoped to this repository only.
 
-Recommended initial permissions:
+Recommended Codex permissions:
 
 ```text
 Contents: Read and write
@@ -218,9 +218,26 @@ Issues: Read and write
 Metadata: Read
 ```
 
+Recommended Hermes permissions:
+
+```text
+Contents: Read and write
+Pull requests: Read and write
+Issues: Read
+Metadata: Read
+```
+
+Hermes should be able to create branches, push implementation work, and open pull requests.
+
+Hermes should not be able to change issue scope, priority, labels, milestones, or completion conditions.
+
 Do not grant broad account-wide permissions unless there is a clear need.
 
 Do not grant Actions, Secrets, or Administration permissions during the initial phase.
+
+Do not allow agent accounts to push directly to `main`.
+
+The human developer keeps final merge authority unless explicitly delegated.
 
 ## Files That Should Not Be Committed
 
