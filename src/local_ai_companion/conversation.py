@@ -1,7 +1,8 @@
-import json
 import uuid
 
 from .history import HistoryStore
+from .recovery import try_extract_json
+from .providers import ProviderResult
 from .schema import fallback_response, validate_assistant_response
 
 
@@ -15,9 +16,31 @@ class ConversationCore:
         request_id = request_id or str(uuid.uuid4())
         past = self.history_store.get_recent(conversation_id, self.max_history_turns)
         raw_response = self.provider.generate(user_text, past)
+    def __init__(self, provider, max_history_turns=12, log_writer=None):
+        self.provider = provider
+        self.max_history_turns = max_history_turns
+        self.history = []
+        self.log_writer = log_writer
+
+    def send(self, user_text, conversation_id="default", request_id=None):
+        request_id = request_id or str(uuid.uuid4())
+        result = self.provider.generate(
+            user_text, self.history[-self.max_history_turns :]
+        )
+
+        if isinstance(result, ProviderResult):
+            raw_response = result.raw_response
+            provider_name = result.provider_name
+            latency_ms = result.latency_ms
+        else:
+            raw_response = result
+            provider_name = getattr(self.provider, "name", "unknown")
+            latency_ms = None
 
         try:
-            parsed = json.loads(raw_response)
+            parsed = try_extract_json(raw_response)
+            if parsed is None:
+                raise ValueError("no valid JSON object found in response")
             assistant = validate_assistant_response(parsed)
             valid = True
             error = None
@@ -33,8 +56,14 @@ class ConversationCore:
             "assistant": assistant,
             "valid": valid,
             "error": error,
+            "provider": getattr(self.provider, "name", "unknown"),
+            "provider": provider_name,
+            "latency_ms": latency_ms,
         }
         self.history_store.add(conversation_id, turn)
+
+        if self.log_writer is not None:
+            self.log_writer.write(turn)
 
         return {
             "request_id": request_id,
