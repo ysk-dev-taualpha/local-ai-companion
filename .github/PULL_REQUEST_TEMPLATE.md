@@ -1,38 +1,38 @@
-## 概要
+## Summary
 
 - 
 
-## 変更範囲
+## Scope
 
-- [ ] コード
-- [ ] テスト
-- [ ] ドキュメント
-- [ ] アーキテクチャ / API契約
+- [ ] Code
+- [ ] Tests
+- [ ] Docs
+- [ ] Architecture / API contract
 
-## 確認内容
+## Verification
 
-実行したコマンド:
-
-```text
-
-```
-
-結果:
+Command(s) run:
 
 ```text
 
 ```
 
-## ドキュメント更新
+Result:
 
-- [ ] ドキュメント更新なし
-- [ ] WBSを更新
-- [ ] API契約を更新
-- [ ] アーキテクチャ / 意思決定ログを更新
-- [ ] READMEまたは利用手順を更新
+```text
 
-## レビュー観点
+```
 
-特に見てほしい点:
+## Documentation
+
+- [ ] No documentation update needed
+- [ ] Updated WBS
+- [ ] Updated API contracts
+- [ ] Updated architecture / decision log
+- [ ] Updated README or usage docs
+
+## Review Notes
+
+Areas reviewers should focus on:
 
 - 
