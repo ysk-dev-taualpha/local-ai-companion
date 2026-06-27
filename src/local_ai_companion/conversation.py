@@ -6,10 +6,11 @@ from .schema import fallback_response, validate_assistant_response
 
 
 class ConversationCore:
-    def __init__(self, provider, max_history_turns=12):
+    def __init__(self, provider, max_history_turns=12, log_writer=None):
         self.provider = provider
         self.max_history_turns = max_history_turns
         self.history = []
+        self.log_writer = log_writer
 
     def send(self, user_text, conversation_id="default", request_id=None):
         request_id = request_id or str(uuid.uuid4())
@@ -43,10 +44,14 @@ class ConversationCore:
             "assistant": assistant,
             "valid": valid,
             "error": error,
+            "provider": getattr(self.provider, "name", "unknown"),
             "provider": provider_name,
             "latency_ms": latency_ms,
         }
         self.history.append(turn)
+
+        if self.log_writer is not None:
+            self.log_writer.write(turn)
 
         return {
             "request_id": request_id,
