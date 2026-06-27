@@ -28,6 +28,8 @@ ALLOWED_SPEAK_STYLES = {
     "playful",
 }
 
+MAX_TEXT_LENGTH = 500
+
 
 class ResponseValidationError(ValueError):
     pass
@@ -45,6 +47,10 @@ def validate_assistant_response(value):
 
     if not isinstance(text, str) or not text.strip():
         raise ResponseValidationError("text must be a non-empty string")
+    if len(text.strip()) > MAX_TEXT_LENGTH:
+        raise ResponseValidationError(
+            "text exceeds max length of {} characters".format(MAX_TEXT_LENGTH)
+        )
     if emotion not in ALLOWED_EMOTIONS:
         raise ResponseValidationError("emotion is not allowed: {}".format(emotion))
     if motion not in ALLOWED_MOTIONS:
