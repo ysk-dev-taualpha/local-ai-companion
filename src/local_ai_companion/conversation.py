@@ -1,6 +1,6 @@
-import json
 import uuid
 
+from .recovery import try_extract_json
 from .providers import ProviderResult
 from .schema import fallback_response, validate_assistant_response
 
@@ -28,7 +28,9 @@ class ConversationCore:
             latency_ms = None
 
         try:
-            parsed = json.loads(raw_response)
+            parsed = try_extract_json(raw_response)
+            if parsed is None:
+                raise ValueError("no valid JSON object found in response")
             assistant = validate_assistant_response(parsed)
             valid = True
             error = None
