@@ -1,5 +1,6 @@
 import unittest
 
+from local_ai_companion.schema import MAX_TEXT_LENGTH, ResponseValidationError, validate_assistant_response
 from local_ai_companion.schema import (
     ALLOWED_EMOTIONS,
     ALLOWED_MOTIONS,
@@ -99,6 +100,15 @@ class SchemaRejectionTests(unittest.TestCase):
                 }
             )
 
+    def test_text_exceeds_max_length_fails(self):
+        long_text = "a" * (MAX_TEXT_LENGTH + 1)
+        with self.assertRaises(ResponseValidationError):
+            validate_assistant_response(
+                {
+                    "text": long_text,
+                    "emotion": "neutral",
+                    "motion": "idle",
+                    "speak_style": "normal",
     def test_invalid_motion_fails(self):
         with self.assertRaises(ResponseValidationError):
             validate_assistant_response(
@@ -190,6 +200,18 @@ class SchemaRejectionTests(unittest.TestCase):
                 }
             )
 
+    def test_text_at_max_length_is_accepted(self):
+        max_text = "あ" * MAX_TEXT_LENGTH
+        response = validate_assistant_response(
+            {
+                "text": max_text,
+                "emotion": "neutral",
+                "motion": "idle",
+                "speak_style": "normal",
+                "interruptible": True,
+            }
+        )
+        self.assertEqual(len(response["text"]), MAX_TEXT_LENGTH)
     def test_missing_emotion_fails(self):
         with self.assertRaises(ResponseValidationError):
             validate_assistant_response(
