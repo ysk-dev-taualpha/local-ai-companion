@@ -111,7 +111,7 @@ Recommended merge buttons:
 3. Push the task branch to GitHub.
 4. Open a pull request into `main`.
 5. Fill in the pull request template.
-6. Request review from another participant.
+6. Request review from the expected reviewer when creating or updating the pull request.
 7. Address review comments on the same branch.
 8. Merge after approval and verification.
 9. Delete the task branch after merge.
@@ -119,6 +119,9 @@ Recommended merge buttons:
 For Codex and Hermes:
 
 - Do not merge your own implementation unless the human developer explicitly asks.
+- When opening a pull request, request review from `ysk0518` by default.
+- If another agent is the expected reviewer, request that reviewer explicitly.
+- If review request fails, leave a pull request comment that names the intended reviewer and mention it in the final report.
 - If reviewing another agent's work, use a review stance: prioritize bugs, contract mismatches, missing tests, and operational risks.
 - If a PR changes architecture or API contracts, verify the relevant docs changed in the same PR.
 
