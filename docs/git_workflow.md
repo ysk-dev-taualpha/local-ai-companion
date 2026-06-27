@@ -23,20 +23,24 @@ Rules:
 
 Codex and Hermes should work on separate short-lived branches.
 
-Use agent-prefixed branches when the main actor is clear:
+Use agent-prefixed branches whenever the implementation owner is Codex or Hermes:
 
 ```text
-codex/v0.1-python-scaffold
-codex/v0.1-response-schema
-hermes/v0.1-provider-interface
-hermes/v0.1-logging
+codex/issue-4-response-schema
+codex/issue-6-prompt-management
+hermes/issue-5-provider-interface
+hermes/issue-10-tests-and-readme
 ```
 
 These branches should target one WBS item or one small coherent change.
 
+Agent-owned work should not use `feature/` branches.
+
+If a branch was accidentally created as `feature/` but the work is owned by Codex or Hermes, do not rename it in the middle of an active pull request unless there is a clear benefit. Instead, mark the owner in the pull request title, body, or comment, and use the correct prefix for the next branch.
+
 ### Shared Feature Branches
 
-Use `feature/` when the work is not owned by a single agent or is driven directly by the human developer.
+Use `feature/` only when the work is not owned by a single agent or is driven directly by the human developer.
 
 ```text
 feature/v0.1-cli
@@ -159,12 +163,14 @@ Use small branches scoped to one task.
 Examples:
 
 ```text
-codex/v0.1-response-schema
-hermes/v0.1-provider-interface
+codex/issue-4-response-schema
+hermes/issue-5-provider-interface
 feature/v0.1-cli
 docs/git-workflow
 fix/v0.1-json-fallback
 ```
+
+When checking branch lists, `codex/` and `hermes/` prefixes should make ownership obvious without opening the pull request.
 
 ## Commit Messages
 
