@@ -1,5 +1,6 @@
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -14,9 +15,16 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class PromptConfig:
+    system_prompt_path: str = ""
+    response_format_path: str = ""
+
+
+@dataclass(frozen=True)
 class AppConfig:
-    conversation: ConversationConfig = ConversationConfig()
-    llm: LLMConfig = LLMConfig()
+    conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    prompt: PromptConfig = field(default_factory=PromptConfig)
 
 
 def load_config(path=None):
@@ -28,6 +36,7 @@ def load_config(path=None):
 
     conversation = raw.get("conversation", {})
     llm = raw.get("llm", {})
+    prompt_raw = raw.get("prompt", {})
 
     return AppConfig(
         conversation=ConversationConfig(
@@ -35,4 +44,25 @@ def load_config(path=None):
             max_history_turns=int(conversation.get("max_history_turns", 12)),
         ),
         llm=LLMConfig(provider=llm.get("provider", "mock")),
+        prompt=PromptConfig(
+            system_prompt_path=prompt_raw.get("system_prompt_path", ""),
+            response_format_path=prompt_raw.get("response_format_path", ""),
+        ),
     )
+
+
+def load_prompt_text(path):
+    if not path:
+        return ""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read().strip()
+
+
+DEFAULT_SYSTEM_PROMPT = "あなたは常駐型AIアシスタントです。応答は必ずJSON形式で返してください。"
+DEFAULT_RESPONSE_FORMAT = "応答はJSONオブジェクトのみを返してください。"
+
+
+def build_prompts(config):
+    system = load_prompt_text(config.prompt.system_prompt_path) or DEFAULT_SYSTEM_PROMPT
+    fmt = load_prompt_text(config.prompt.response_format_path) or DEFAULT_RESPONSE_FORMAT
+    return system, fmt
