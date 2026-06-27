@@ -1,0 +1,34 @@
+# Normalize text files across Windows and Unix tools.
+* text=auto
+
+# Documentation
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Source files
+*.py text eol=lf
+*.go text eol=lf
+*.cs text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+
+# Binary / large assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.fbx binary
+*.blend binary
+*.unitypackage binary
+*.onnx binary
+*.gguf binary
+*.safetensors binary
+*.pt binary
+*.pth binary

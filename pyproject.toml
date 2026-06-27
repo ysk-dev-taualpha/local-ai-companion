@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-ai-companion"
+version = "0.1.0"
+description = "Local AI companion conversation core."
+requires-python = ">=3.7"
+
+[project.scripts]
+local-ai-companion = "local_ai_companion.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

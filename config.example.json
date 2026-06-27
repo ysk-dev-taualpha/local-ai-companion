@@ -1,0 +1,9 @@
+{
+  "conversation": {
+    "default_conversation_id": "default",
+    "max_history_turns": 12
+  },
+  "llm": {
+    "provider": "mock"
+  }
+}
