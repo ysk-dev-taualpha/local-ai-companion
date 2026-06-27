@@ -78,9 +78,15 @@ GitHub Projectsのボードを作るまでは、状態はIssueコメントや紐
 ```text
 codex/issue-4-json-schema
 hermes/issue-5-provider-interface
-feature/issue-8-history-management
+hermes/issue-10-tests-and-readme
 fix/issue-7-json-fallback
 ```
+
+CodexまたはHermesが主体の作業では、必ず`codex/`または`hermes/`のprefixを使います。
+
+`feature/`は、人間主導の作業、または担当agentが未確定の共有作業だけに使います。
+
+既にopen済みのPRでbranch名がずれている場合は、無理にrenameせず、PRタイトル・本文・コメントのいずれかに作業主体を明記します。次回以降のbranchで正しいprefixに戻します。
 
 Pull Request本文にはIssue番号を入れます。
 
