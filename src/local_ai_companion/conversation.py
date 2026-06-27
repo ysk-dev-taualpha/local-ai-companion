@@ -52,7 +52,9 @@ class ConversationCore:
         self.history_store.add(conversation_id, turn)
 
         if self.log_writer is not None:
-            self.log_writer.write(turn)
+            log_entry = dict(turn)
+            log_entry["raw_response"] = raw_response
+            self.log_writer.write(log_entry)
 
         return {
             "request_id": request_id,

@@ -53,3 +53,23 @@ Use HTTP + JSON for early service boundaries. Introduce WebSocket where bidirect
 Reason:
 
 HTTP + JSON is easy to debug and sufficient for early request-response flows. WebSocket is better reserved for Unity-Go event streams and streaming responses.
+
+## 2026-06-28: LLM Provider Uses OpenAI-Compatible API
+
+Decision:
+
+The Python conversation core uses an OpenAI-compatible chat completions interface for both hosted and local LLMs. Local LLMs should be exposed through an OpenAI-compatible HTTP server instead of being embedded directly into the application process.
+
+Reason:
+
+This keeps the provider boundary simple and avoids separate local-model integration paths during v0.1. Go can later own the same external API boundary when the runtime layer becomes the main communication pipe.
+
+## 2026-06-28: Logging Defaults Avoid User Text and Raw Responses
+
+Decision:
+
+Conversation JSONL logging is enabled only when configured, and debug-sensitive fields are opt-in. The default log output excludes `user_text` and `raw_response`; these can be enabled explicitly through `logging.include_user_text` and `logging.include_raw_response`.
+
+Reason:
+
+Reliable personal-information detection is difficult and should not be treated as a v0.1 safety mechanism. Safe defaults should reduce accidental capture of user content while keeping operational fields such as request ID, provider, latency, validity, and fallback errors available.
