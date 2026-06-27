@@ -109,6 +109,44 @@ PR作成者は自分のPRをapproveしません。
 
 最終的な受け入れとmerge判断は、明示的に委譲されない限り人間の開発者が持ちます。
 
+## Hermes Task Assignment
+
+Hermesに作業を渡すIssueは、実装専任で動ける粒度まで事前に絞ります。
+
+Hermes向けIssueには、できるだけ次の情報を入れます。
+
+```md
+## Hermesへの指示
+
+このIssueでは実装のみ行う。
+
+設計判断、公開API変更、アーキテクチャ変更、依存ライブラリ追加、データ形式変更、ディレクトリ構成変更、広範囲のリファクタが必要に見えた場合は、実装を止めてIssueまたはPull Requestで確認すること。
+
+## 実装範囲
+
+- 変更してよいファイル:
+- 変更してはいけないファイル:
+- 追加してよいテスト:
+- 完了条件:
+
+## 参照する設計
+
+- docs/architecture.md
+- docs/api_contracts.md
+- docs/decisions.md
+```
+
+Hermes向けIssueでは、曖昧な表現を避けます。
+
+- 避ける: いい感じに整える
+- 避ける: 必要なら設計も見直す
+- 避ける: 関連しそうなところも直す
+- 推奨: `src/local_ai_companion/schema.py` の検証条件だけを変更する
+- 推奨: `tests/test_schema.py` に不正値のテストを追加する
+- 推奨: `docs/api_contracts.md` の該当フィールド説明だけを更新する
+
+HermesがIssue外の改善点を見つけた場合は、実装に含めず、コメントまたは別Issue候補として残します。
+
 ## Daily Working Rule
 
 作業開始前:
