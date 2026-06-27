@@ -18,8 +18,6 @@ def build_parser():
     return parser
 
 
-def run_once(config, conversation_id, request_id, message):
-    provider = create_provider(config.llm.provider, config.llm)
 def _make_log_writer(config, log_dir_arg):
     if log_dir_arg:
         return JSONLLogWriter(log_dir_arg)
@@ -29,7 +27,7 @@ def _make_log_writer(config, log_dir_arg):
 
 
 def run_once(config, conversation_id, request_id, message, log_writer):
-    provider = create_provider(config.llm.provider)
+    provider = create_provider(config.llm.provider, config.llm)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
@@ -46,10 +44,8 @@ def run_once(config, conversation_id, request_id, message, log_writer):
     return 0
 
 
-def run_repl(config, conversation_id):
-    provider = create_provider(config.llm.provider, config.llm)
 def run_repl(config, conversation_id, log_writer):
-    provider = create_provider(config.llm.provider)
+    provider = create_provider(config.llm.provider, config.llm)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
