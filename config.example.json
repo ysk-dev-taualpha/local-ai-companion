@@ -4,10 +4,16 @@
     "max_history_turns": 12
   },
   "llm": {
-    "provider": "mock"
+    "provider": "mock",
+    "base_url": "",
+    "model": "",
+    "api_key_env": "",
+    "timeout_seconds": 30.0
   },
   "logging": {
     "enabled": false,
-    "log_dir": "logs"
+    "log_dir": "logs",
+    "include_user_text": false,
+    "include_raw_response": false
   }
 }

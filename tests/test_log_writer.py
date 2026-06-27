@@ -60,7 +60,8 @@ class ConversationLoggingTests(unittest.TestCase):
 
             entry = json.loads(lines[0])
             self.assertEqual(entry["request_id"], "req-1")
-            self.assertEqual(entry["user_text"], "hello")
+            self.assertNotIn("user_text", entry)
+            self.assertNotIn("raw_response", entry)
             self.assertEqual(entry["provider"], "mock")
             self.assertIn("assistant", entry)
             self.assertTrue(entry["valid"])
@@ -82,11 +83,29 @@ class ConversationLoggingTests(unittest.TestCase):
                 entry = json.loads(f.readline())
 
             required = {
-                "request_id", "conversation_id", "user_text",
-                "assistant", "valid", "error", "provider",
+                "request_id", "conversation_id", "assistant",
+                "valid", "error", "provider",
             }
             for field in required:
                 self.assertIn(field, entry, "missing field: {}".format(field))
+
+    def test_debug_fields_are_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = JSONLLogWriter(
+                tmpdir,
+                include_user_text=True,
+                include_raw_response=True,
+            )
+            core = ConversationCore(MockLLMProvider(), log_writer=writer)
+            core.send("secret-ish", request_id="r1")
+            writer.close()
+
+            log_path = os.path.join(tmpdir, "conversation.jsonl")
+            with open(log_path, "r", encoding="utf-8") as f:
+                entry = json.loads(f.readline())
+
+            self.assertEqual(entry["user_text"], "secret-ish")
+            self.assertIn("raw_response", entry)
 
 
 if __name__ == "__main__":

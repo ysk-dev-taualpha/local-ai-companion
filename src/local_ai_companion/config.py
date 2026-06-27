@@ -14,6 +14,7 @@ class LLMConfig:
     base_url: str = ""
     model: str = ""
     api_key_env: str = ""
+    timeout_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class PromptConfig:
 class LoggingConfig:
     enabled: bool = False
     log_dir: str = ""
+    include_user_text: bool = False
+    include_raw_response: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ def load_config(path=None):
             base_url=llm.get("base_url", ""),
             model=llm.get("model", ""),
             api_key_env=llm.get("api_key_env", ""),
+            timeout_seconds=float(llm.get("timeout_seconds", 30.0)),
         ),
         prompt=PromptConfig(
             system_prompt_path=prompt_raw.get("system_prompt_path", ""),
@@ -66,6 +70,8 @@ def load_config(path=None):
         logging=LoggingConfig(
             enabled=logging_raw.get("enabled", False),
             log_dir=logging_raw.get("log_dir", ""),
+            include_user_text=logging_raw.get("include_user_text", False),
+            include_raw_response=logging_raw.get("include_raw_response", False),
         ),
     )
 
