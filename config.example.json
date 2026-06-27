@@ -5,5 +5,9 @@
   },
   "llm": {
     "provider": "mock"
+  },
+  "logging": {
+    "enabled": false,
+    "log_dir": "logs"
   }
 }

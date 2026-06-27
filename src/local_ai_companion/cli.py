@@ -4,6 +4,7 @@ import sys
 
 from .config import load_config
 from .conversation import ConversationCore
+from .log_writer import JSONLLogWriter
 from .providers import create_provider
 
 
@@ -13,14 +14,24 @@ def build_parser():
     parser.add_argument("--message", help="Single user message")
     parser.add_argument("--conversation-id", help="Conversation session ID")
     parser.add_argument("--request-id", help="Request ID for tracing")
+    parser.add_argument("--log-dir", help="Enable JSONL logging to directory")
     return parser
 
 
-def run_once(config, conversation_id, request_id, message):
+def _make_log_writer(config, log_dir_arg):
+    if log_dir_arg:
+        return JSONLLogWriter(log_dir_arg)
+    if config.logging.enabled and config.logging.log_dir:
+        return JSONLLogWriter(config.logging.log_dir)
+    return None
+
+
+def run_once(config, conversation_id, request_id, message, log_writer):
     provider = create_provider(config.llm.provider)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
+        log_writer=log_writer,
     )
     response = core.send(
         message,
@@ -28,33 +39,40 @@ def run_once(config, conversation_id, request_id, message):
         request_id=request_id,
     )
     print(json.dumps(response, ensure_ascii=False, indent=2))
+    if log_writer:
+        log_writer.close()
     return 0
 
 
-def run_repl(config, conversation_id):
+def run_repl(config, conversation_id, log_writer):
     provider = create_provider(config.llm.provider)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
+        log_writer=log_writer,
     )
 
     print("Local AI Companion CLI. Type /exit to quit.")
-    while True:
-        try:
-            user_text = input("> ").strip()
-        except EOFError:
-            return 0
+    try:
+        while True:
+            try:
+                user_text = input("> ").strip()
+            except EOFError:
+                return 0
 
-        if user_text in {"/exit", "/quit"}:
-            return 0
-        if not user_text:
-            continue
+            if user_text in {"/exit", "/quit"}:
+                return 0
+            if not user_text:
+                continue
 
-        response = core.send(
-            user_text,
-            conversation_id=conversation_id,
-        )
-        print(json.dumps(response, ensure_ascii=False, indent=2))
+            response = core.send(
+                user_text,
+                conversation_id=conversation_id,
+            )
+            print(json.dumps(response, ensure_ascii=False, indent=2))
+    finally:
+        if log_writer:
+            log_writer.close()
 
 
 def main(argv=None):
@@ -63,10 +81,11 @@ def main(argv=None):
     config = load_config(args.config)
 
     conversation_id = args.conversation_id or config.conversation.default_conversation_id
+    log_writer = _make_log_writer(config, args.log_dir)
 
     if args.message:
-        return run_once(config, conversation_id, args.request_id, args.message)
-    return run_repl(config, conversation_id)
+        return run_once(config, conversation_id, args.request_id, args.message, log_writer)
+    return run_repl(config, conversation_id, log_writer)
 
 
 if __name__ == "__main__":

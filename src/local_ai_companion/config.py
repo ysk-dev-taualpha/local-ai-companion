@@ -1,5 +1,4 @@
 import json
-import os
 from dataclasses import dataclass, field
 
 
@@ -21,10 +20,17 @@ class PromptConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    enabled: bool = False
+    log_dir: str = ""
+
+
+@dataclass(frozen=True)
 class AppConfig:
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
 def load_config(path=None):
@@ -37,6 +43,7 @@ def load_config(path=None):
     conversation = raw.get("conversation", {})
     llm = raw.get("llm", {})
     prompt_raw = raw.get("prompt", {})
+    logging_raw = raw.get("logging", {})
 
     return AppConfig(
         conversation=ConversationConfig(
@@ -47,6 +54,10 @@ def load_config(path=None):
         prompt=PromptConfig(
             system_prompt_path=prompt_raw.get("system_prompt_path", ""),
             response_format_path=prompt_raw.get("response_format_path", ""),
+        ),
+        logging=LoggingConfig(
+            enabled=logging_raw.get("enabled", False),
+            log_dir=logging_raw.get("log_dir", ""),
         ),
     )
 
