@@ -29,20 +29,90 @@ Text input should produce a stable assistant response JSON:
 }
 ```
 
-## Run v0.1 CLI
+## セットアップ
 
-From the project root:
+Python 3.x のみが必要です。追加の依存パッケージはありません。
 
-```powershell
-$env:PYTHONPATH=(Resolve-Path .\src)
-python -m local_ai_companion --message "今日の作業を整理したい"
+```bash
+# リポジトリのクローン
+git clone https://github.com/ysk-dev-taualpha/local-ai-companion.git
+cd local-ai-companion
 ```
 
-Run tests:
+## 設定ファイル
 
-```powershell
+`config.example.json` をコピーしてカスタマイズします。
+
+```bash
+cp config.example.json config.json
+```
+
+設定項目の意味:
+
+```jsonc
+{
+  "conversation": {
+    "default_conversation_id": "default", // 会話セッションのデフォルトID
+    "max_history_turns": 12              // LLMに渡す過去ターンの上限
+  },
+  "llm": {
+    "provider": "mock"                    // 使用するLLMプロバイダ（現在は "mock" のみ）
+  }
+}
+```
+
+設定ファイルを指定しない場合は、上記のデフォルト値が使われます。
+
+## 実行方法
+
+### シングルメッセージ
+
+```bash
+# Linux / macOS
+PYTHONPATH=./src python3 -m local_ai_companion --message "こんにちは"
+
+# --config で設定ファイルを指定可能
+PYTHONPATH=./src python3 -m local_ai_companion --config config.json --message "こんにちは"
+
+# Windows (PowerShell)
 $env:PYTHONPATH=(Resolve-Path .\src)
-python -m unittest discover -s tests
+python -m local_ai_companion --message "こんにちは"
+```
+
+### 対話モード（REPL）
+
+```bash
+# Linux / macOS
+PYTHONPATH=./src python3 -m local_ai_companion
+
+# `/exit` または `/quit` で終了、Ctrl+D でも終了できます
+```
+
+出力例:
+
+```json
+{
+  "request_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "conversation_id": "default",
+  "assistant": {
+    "text": "受け取りました: こんにちは",
+    "emotion": "neutral",
+    "motion": "nod",
+    "speak_style": "normal",
+    "interruptible": true
+  }
+}
+```
+
+## テスト実行
+
+```bash
+# Linux / macOS
+PYTHONPATH=./src python3 -m unittest discover -s tests -v
+
+# Windows (PowerShell)
+$env:PYTHONPATH=(Resolve-Path .\src)
+python -m unittest discover -s tests -v
 ```
 
 ## Participants
