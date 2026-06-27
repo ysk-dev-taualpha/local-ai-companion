@@ -111,7 +111,7 @@ Recommended merge buttons:
 3. Push the task branch to GitHub.
 4. Open a pull request into `main`.
 5. Fill in the pull request template.
-6. Request review from another participant.
+6. Request review from the expected reviewer when creating or updating the pull request.
 7. Address review comments on the same branch.
 8. Merge after approval and verification.
 9. Delete the task branch after merge.
@@ -119,6 +119,9 @@ Recommended merge buttons:
 For Codex and Hermes:
 
 - Do not merge your own implementation unless the human developer explicitly asks.
+- When opening a pull request, request review from `ysk0518` by default.
+- If another agent is the expected reviewer, request that reviewer explicitly.
+- If review request fails, leave a pull request comment that names the intended reviewer and mention it in the final report.
 - If reviewing another agent's work, use a review stance: prioritize bugs, contract mismatches, missing tests, and operational risks.
 - If a PR changes architecture or API contracts, verify the relevant docs changed in the same PR.
 
@@ -209,7 +212,7 @@ Review should prioritize:
 
 When GitHub or MCP integration is introduced, use a fine-grained personal access token scoped to this repository only.
 
-Recommended initial permissions:
+Recommended Codex permissions:
 
 ```text
 Contents: Read and write
@@ -218,9 +221,26 @@ Issues: Read and write
 Metadata: Read
 ```
 
+Recommended Hermes permissions:
+
+```text
+Contents: Read and write
+Pull requests: Read and write
+Issues: Read
+Metadata: Read
+```
+
+Hermes should be able to create branches, push implementation work, and open pull requests.
+
+Hermes should not be able to change issue scope, priority, labels, milestones, or completion conditions.
+
 Do not grant broad account-wide permissions unless there is a clear need.
 
 Do not grant Actions, Secrets, or Administration permissions during the initial phase.
+
+Do not allow agent accounts to push directly to `main`.
+
+The human developer keeps final merge authority unless explicitly delegated.
 
 ## Files That Should Not Be Committed
 
