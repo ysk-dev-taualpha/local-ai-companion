@@ -11,6 +11,9 @@ class ConversationConfig:
 @dataclass(frozen=True)
 class LLMConfig:
     provider: str = "mock"
+    base_url: str = ""
+    model: str = ""
+    api_key_env: str = ""
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,12 @@ def load_config(path=None):
             default_conversation_id=conversation.get("default_conversation_id", "default"),
             max_history_turns=int(conversation.get("max_history_turns", 12)),
         ),
-        llm=LLMConfig(provider=llm.get("provider", "mock")),
+        llm=LLMConfig(
+            provider=llm.get("provider", "mock"),
+            base_url=llm.get("base_url", ""),
+            model=llm.get("model", ""),
+            api_key_env=llm.get("api_key_env", ""),
+        ),
         prompt=PromptConfig(
             system_prompt_path=prompt_raw.get("system_prompt_path", ""),
             response_format_path=prompt_raw.get("response_format_path", ""),
