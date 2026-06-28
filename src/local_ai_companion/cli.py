@@ -1,4 +1,5 @@
-import argpars import json
+import argparse
+import json
 import sys
 
 from .config import load_config
