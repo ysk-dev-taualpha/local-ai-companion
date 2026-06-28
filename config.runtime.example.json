@@ -1,0 +1,12 @@
+{
+  "runtime": {
+    "listen_addr": "127.0.0.1:8080",
+    "request_timeout_ms": 30000
+  },
+  "python_service": {
+    "base_url": "http://127.0.0.1:8090"
+  },
+  "logging": {
+    "level": "info"
+  }
+}

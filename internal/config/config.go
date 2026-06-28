@@ -1,0 +1,53 @@
+package config
+
+import (
+	"encoding/json"
+	"os"
+)
+
+type RuntimeConfig struct {
+	ListenAddr       string `json:"listen_addr"`
+	RequestTimeoutMs int    `json:"request_timeout_ms"`
+}
+
+type PythonServiceConfig struct {
+	BaseURL string `json:"base_url"`
+}
+
+type LoggingConfig struct {
+	Level string `json:"level"`
+}
+
+type Config struct {
+	Runtime       RuntimeConfig       `json:"runtime"`
+	PythonService PythonServiceConfig `json:"python_service"`
+	Logging       LoggingConfig       `json:"logging"`
+}
+
+func Load(path string) (*Config, error) {
+	cfg := &Config{
+		Runtime: RuntimeConfig{
+			ListenAddr:       "127.0.0.1:8080",
+			RequestTimeoutMs: 30000,
+		},
+		PythonService: PythonServiceConfig{
+			BaseURL: "http://127.0.0.1:8090",
+		},
+		Logging: LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	if path == "" {
+		return cfg, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
