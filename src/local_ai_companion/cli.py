@@ -1,5 +1,4 @@
-import argparse
-import json
+import argpars import json
 import sys
 
 from .config import load_config
@@ -15,22 +14,15 @@ def build_parser():
     parser.add_argument("--conversation-id", help="Conversation session ID")
     parser.add_argument("--request-id", help="Request ID for tracing")
     parser.add_argument("--log-dir", help="Enable JSONL logging to directory")
+    parser.add_argument("--serve", action="store_true", help="Start as HTTP server")
     return parser
 
 
 def _make_log_writer(config, log_dir_arg):
     if log_dir_arg:
-        return JSONLLogWriter(
-            log_dir_arg,
-            include_user_text=config.logging.include_user_text,
-            include_raw_response=config.logging.include_raw_response,
-        )
+        return JSONLLogWriter(log_dir_arg)
     if config.logging.enabled and config.logging.log_dir:
-        return JSONLLogWriter(
-            config.logging.log_dir,
-            include_user_text=config.logging.include_user_text,
-            include_raw_response=config.logging.include_raw_response,
-        )
+        return JSONLLogWriter(config.logging.log_dir)
     return None
 
 
@@ -91,6 +83,10 @@ def main(argv=None):
     conversation_id = args.conversation_id or config.conversation.default_conversation_id
     log_writer = _make_log_writer(config, args.log_dir)
 
+    if args.serve:
+        from .server import run_server
+        run_server(config)
+        return 0
     if args.message:
         return run_once(config, conversation_id, args.request_id, args.message, log_writer)
     return run_repl(config, conversation_id, log_writer)
