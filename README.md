@@ -123,6 +123,8 @@ PYTHONPATH=./src python3 -m local_ai_companion
 
 ## テスト実行
 
+### Python
+
 ```bash
 # Linux / macOS
 PYTHONPATH=./src python3 -m unittest discover -s tests -v
@@ -130,6 +132,30 @@ PYTHONPATH=./src python3 -m unittest discover -s tests -v
 # Windows (PowerShell)
 $env:PYTHONPATH=(Resolve-Path .\src)
 python -m unittest discover -s tests -v
+```
+
+### Go
+
+```bash
+go test ./...
+```
+
+## Go-Python 結合確認 (v0.2+)
+
+詳細は [docs/v0.2-integration.md](docs/v0.2-integration.md) を参照してください。
+
+```bash
+# ターミナル1: Python AI Service 起動
+PYTHONPATH=./src python3 -m local_ai_companion --serve
+
+# ターミナル2: Go Runtime 起動
+go run ./cmd/local-ai-runtime --config config.runtime.example.json
+
+# ターミナル3: 動作確認
+curl http://127.0.0.1:8080/healthz
+curl -X POST http://127.0.0.1:8080/v1/conversation \
+  -H "Content-Type: application/json" \
+  -d '{"message":"こんにちは"}'
 ```
 
 ## Participants
