@@ -11,11 +11,13 @@ import (
 )
 
 type mockPythonClient struct {
-	resp *client.ConversationResponse
-	err  error
+	resp    *client.ConversationResponse
+	err     error
+	lastReq client.ConversationRequest
 }
 
 func (m *mockPythonClient) Send(req client.ConversationRequest) (*client.ConversationResponse, error) {
+	m.lastReq = req
 	return m.resp, m.err
 }
 
@@ -49,6 +51,39 @@ func TestHandleConversationSuccess(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.RequestID != "req-1" {
 		t.Errorf("expected req-1, got %s", resp.RequestID)
+	}
+}
+
+func TestHandleConversationGeneratesRequestID(t *testing.T) {
+	mock := &mockPythonClient{
+		resp: &client.ConversationResponse{
+			RequestID:      "generated-by-python",
+			ConversationID: "default",
+			Assistant: client.AssistantMessage{
+				Text:          "hello",
+				Emotion:       "neutral",
+				Motion:        "idle",
+				SpeakStyle:    "normal",
+				Interruptible: true,
+			},
+		},
+	}
+	h := New(mock)
+
+	body := `{"message":"hi"}`
+	req := httptest.NewRequest("POST", "/v1/conversation", bytes.NewReader([]byte(body)))
+	w := httptest.NewRecorder()
+
+	h.HandleConversation(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	if mock.lastReq.RequestID == "" {
+		t.Fatal("expected generated request_id")
+	}
+	if mock.lastReq.Message != "hi" {
+		t.Errorf("expected message to be forwarded, got %s", mock.lastReq.Message)
 	}
 }
 
