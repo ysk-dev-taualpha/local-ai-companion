@@ -32,7 +32,13 @@ v0.1: Python Conversation Core
 
 ## セットアップ
 
+### Python (v0.1+)
+
 Python 3.x のみが必要です。追加の依存パッケージはありません。
+
+### Go Runtime (v0.2+)
+
+Go 1.21 以上が必要です。
 
 ```bash
 # リポジトリのクローン
