@@ -1,10 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/api"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/config"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
 )
@@ -21,6 +28,32 @@ func main() {
 
 	logger := logging.New(cfg.Logging.Level)
 	logger.Info("Go Runtime starting on %s", cfg.Runtime.ListenAddr)
-	logger.Info("Python AI Service URL: %s", cfg.PythonService.BaseURL)
-	logger.Info("Go Runtime ready (scaffold)")
+
+	pythonClient := client.New(cfg.PythonService.BaseURL)
+	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
+	mux.HandleFunc("/healthz", handler.HandleHealth)
+
+	server := &http.Server{
+		Addr:    cfg.Runtime.ListenAddr,
+		Handler: mux,
+	}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		logger.Info("shutting down...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+	}()
+
+	logger.Info("Go Runtime ready")
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		logger.Error("server error: %v", err)
+		os.Exit(1)
+	}
 }
