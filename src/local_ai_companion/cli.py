@@ -20,10 +20,12 @@ def build_parser():
 
 
 def _make_log_writer(config, log_dir_arg):
+    include_user = config.logging.include_user_text
+    include_raw = config.logging.include_raw_response
     if log_dir_arg:
-        return JSONLLogWriter(log_dir_arg)
+        return JSONLLogWriter(log_dir_arg, include_user_text=include_user, include_raw_response=include_raw)
     if config.logging.enabled and config.logging.log_dir:
-        return JSONLLogWriter(config.logging.log_dir)
+        return JSONLLogWriter(config.logging.log_dir, include_user_text=include_user, include_raw_response=include_raw)
     return None
 
 

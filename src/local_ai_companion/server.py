@@ -12,6 +12,7 @@ class ConversationHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path != "/v1/conversation":
+            self._drain_body()
             self._send_json(404, {"error": {"code": "not_found", "message": "not found"}})
             return
 
@@ -37,6 +38,14 @@ class ConversationHandler(BaseHTTPRequestHandler):
             request_id=request_id,
         )
         self._send_json(200, response)
+
+    def _drain_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 0:
+                self.rfile.read(length)
+        except Exception:
+            pass
 
     def _send_json(self, status, data):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
