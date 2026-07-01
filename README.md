@@ -32,7 +32,13 @@ v0.1: Python Conversation Core
 
 ## セットアップ
 
+### Python (v0.1+)
+
 Python 3.x のみが必要です。追加の依存パッケージはありません。
+
+### Go Runtime (v0.2+)
+
+Go 1.21 以上が必要です。
 
 ```bash
 # リポジトリのクローン
@@ -57,17 +63,7 @@ cp config.example.json config.json
     "max_history_turns": 12              // LLMに渡す過去ターンの上限
   },
   "llm": {
-    "provider": "mock",                   // "mock" or "openai_compatible"
-    "base_url": "",                       // OpenAI-compatible API base URL
-    "model": "",                          // model name for openai_compatible
-    "api_key_env": "",                    // env var name for API key; empty is allowed for local servers
-    "timeout_seconds": 30.0
-  },
-  "logging": {
-    "enabled": false,
-    "log_dir": "logs",
-    "include_user_text": false,           // opt-in; default avoids user text in JSONL
-    "include_raw_response": false         // opt-in; default avoids raw LLM responses in JSONL
+    "provider": "mock"                    // 使用するLLMプロバイダ（現在は "mock" のみ）
   }
 }
 ```
