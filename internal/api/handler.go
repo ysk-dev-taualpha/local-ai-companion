@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
@@ -41,6 +43,9 @@ func (h *Handler) HandleConversation(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if req.RequestID == "" {
+		req.RequestID = newRequestID()
+	}
 
 	resp, err := h.PythonClient.Send(req)
 	if err != nil {
@@ -57,4 +62,12 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+func newRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
 }
