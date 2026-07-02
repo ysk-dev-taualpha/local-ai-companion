@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,20 +29,20 @@ type AssistantMessage struct {
 }
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL string
+	client  *http.Client
 }
 
 func New(baseURL string) *Client {
-	return &Client{
-		baseURL:    baseURL,
-		httpClient: &http.Client{},
-	}
+	return &Client{baseURL: baseURL, client: &http.Client{}}
 }
 
-func (c *Client) Send(req ConversationRequest) (*ConversationResponse, error) {
+func (c *Client) Send(ctx context.Context, req ConversationRequest) (*ConversationResponse, error) {
 	body, _ := json.Marshal(req)
-	resp, err := c.httpClient.Post(c.baseURL+"/v1/conversation", "application/json", bytes.NewReader(body))
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/conversation", bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("python service unavailable: %w", err)
 	}

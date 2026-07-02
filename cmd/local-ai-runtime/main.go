@@ -30,10 +30,11 @@ func main() {
 	logger.Info("Go Runtime starting on %s", cfg.Runtime.ListenAddr)
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
-	handler := api.New(pythonClient)
+	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
+	mux.HandleFunc("/healthz", handler.HandleHealth)
 
 	server := &http.Server{
 		Addr:    cfg.Runtime.ListenAddr,
