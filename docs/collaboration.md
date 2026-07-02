@@ -50,7 +50,7 @@ Expected work:
 - Write or update documentation when features are merged without docs
 - Create small docs-only PRs for missing documentation
 
-Gemma does not evaluate architecture, design intent, performance, or complex logic correctness. If Gemma finds nothing to report, it stays silent. Gemma runs on a local model (Gemma4 26B QAT via Ollama).
+Gemma does not evaluate architecture, design intent, performance, or complex logic correctness. If Gemma finds nothing to report, it stays silent. Gemma runs on Google Gemma 4 26B A4B (QAT quantized, via Ollama on local GPU).
 
 ## Shared Rules
 
