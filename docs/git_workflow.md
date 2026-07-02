@@ -30,6 +30,7 @@ codex/issue-4-response-schema
 codex/issue-6-prompt-management
 hermes/issue-5-provider-interface
 hermes/issue-10-tests-and-readme
+gemma/docs-api-contracts
 ```
 
 These branches should target one WBS item or one small coherent change.
@@ -122,7 +123,8 @@ Recommended merge buttons:
 
 For Codex and Hermes:
 
-- Do not merge your own implementation unless the human developer explicitly asks.
+- Do not merge your own implementation unless the human developer explicitly delegates merge authority.
+- Merge delegation is documented in `docs/project_management.md`. When delegated, automated merge may proceed after approval review and test pass.
 - When opening a pull request, request review from `ysk0518` by default.
 - If another agent is the expected reviewer, request that reviewer explicitly.
 - If review request fails, leave a pull request comment that names the intended reviewer and mention it in the final report.

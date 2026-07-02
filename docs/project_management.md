@@ -79,10 +79,12 @@ GitHub Projectsのボードを作るまでは、状態はIssueコメントや紐
 codex/issue-4-json-schema
 hermes/issue-5-provider-interface
 hermes/issue-10-tests-and-readme
+gemma/docs-missing-readme
+gemma/review-typo-fix
 fix/issue-7-json-fallback
 ```
 
-CodexまたはHermesが主体の作業では、必ず`codex/`または`hermes/`のprefixを使います。
+Codex、Hermes、Gemmaが主体の作業では、必ず`codex/`、`hermes/`、`gemma/`のprefixを使います。
 
 `feature/`は、人間主導の作業、または担当agentが未確定の共有作業だけに使います。
 
@@ -114,6 +116,14 @@ Refs #4
 PR作成者は自分のPRをapproveしません。
 
 最終的な受け入れとmerge判断は、明示的に委譲されない限り人間の開発者が持ちます。
+
+v0.2以降、以下の範囲で自動マージが明示的に委譲されています:
+
+- 全agent（Codex/Hermes/Gemma）のPRが1件以上のapprove reviewを受けた場合
+- テストが通過している場合
+- レビューコメントがすべて解決済みの場合
+
+マージ後のIssue closeも同様に委譲されています。
 
 ## Hermes Task Assignment
 

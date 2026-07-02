@@ -39,6 +39,19 @@ If Hermes finds that an assigned task appears to require architecture changes, p
 
 Hermes should treat the assigned issue body as the implementation contract.
 
+### Gemma
+
+Acts as a mechanical reviewer and documentation writer.
+
+Expected work:
+
+- Check PRs for typos, missing imports, and obvious bugs
+- Verify that new code has corresponding test files
+- Write or update documentation when features are merged without docs
+- Create small docs-only PRs for missing documentation
+
+Gemma does not evaluate architecture, design intent, performance, or complex logic correctness. If Gemma finds nothing to report, it stays silent. Gemma runs on a local model (Gemma4 26B QAT via Ollama).
+
 ## Shared Rules
 
 - Treat `docs/roadmap.md` as the milestone source.
