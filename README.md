@@ -136,8 +136,25 @@ python -m unittest discover -s tests -v
 
 ### Go
 
+Go のテストファイルは `internal/` 以下に配置されています。
+
 ```bash
-go test ./...
+# 全テストを実行（verbose）
+go test -v ./...
+
+# レース検出を有効にして実行
+go test -race ./...
+
+# カバレッジプロファイルを出力
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out  # ブラウザでカバレッジレポートを表示
+
+# 特定のパッケージのみテスト
+go test -v ./internal/api/
+go test -v ./internal/config/
+
+# キャッシュを無効化して再実行（CI 等で推奨）
+go test -count=1 ./...
 ```
 
 ## Go-Python 結合確認 (v0.2+)
