@@ -42,17 +42,11 @@ type WSStateNotification struct {
 	State string `json:"state"`
 }
 
-// wsConnState は接続ごとの書き込み制御を保持します。
-type wsConnState struct {
-	writeMu sync.Mutex
-}
-
 // WebSocketHub は複数の WebSocket 接続を goroutine-safe に管理し、
 // 受信したテキストを AI Service に転送して応答を返します。
 type WebSocketHub struct {
 	mu               sync.RWMutex
-	stateMu          sync.Mutex
-	conns            map[*websocket.Conn]*wsConnState
+	conns            map[*websocket.Conn]struct{}
 	pythonClient     PythonClient
 	stateMachine     *state.StateMachine
 	requestTimeoutMs int
@@ -61,7 +55,7 @@ type WebSocketHub struct {
 // NewWebSocketHub は新しい WebSocketHub を生成します。
 func NewWebSocketHub(pythonClient PythonClient, stateMachine *state.StateMachine, requestTimeoutMs int) *WebSocketHub {
 	return &WebSocketHub{
-		conns:            make(map[*websocket.Conn]*wsConnState),
+		conns:            make(map[*websocket.Conn]struct{}),
 		pythonClient:     pythonClient,
 		stateMachine:     stateMachine,
 		requestTimeoutMs: requestTimeoutMs,
@@ -78,7 +72,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.mu.Lock()
-	h.conns[conn] = &wsConnState{}
+	h.conns[conn] = struct{}{}
 	h.mu.Unlock()
 
 	defer func() {
@@ -111,9 +105,6 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 // handleTextMessage はテキストメッセージを AI Service に転送し、
 // StateMachine の状態遷移をブロードキャストします。
 func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-
 	// IDLE→LISTENING 遷移
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
@@ -203,52 +194,26 @@ func (h *WebSocketHub) broadcastState(stateName string) {
 	h.Broadcast(notif)
 }
 
-// writeJSON は WebSocket 接続に JSON メッセージを書き込みます。
-// 接続ごとの write mutex で並行書き込みを防止します。
+// writeJSON は WebSocket 接続に JSON を書き込みます。
 func (h *WebSocketHub) writeJSON(conn *websocket.Conn, v interface{}) error {
-	h.mu.RLock()
-	cs := h.conns[conn]
-	h.mu.RUnlock()
-	if cs == nil {
-		return nil
-	}
-	cs.writeMu.Lock()
-	defer cs.writeMu.Unlock()
-
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, data)
+	return conn.WriteJSON(v)
 }
 
 // Broadcast は接続中のすべてのクライアントにメッセージを送信します。
-// 接続スナップショットを取得後に書き込むため、書き込み中に
-// 接続が追加・削除されても安全です。
 func (h *WebSocketHub) Broadcast(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 
-	// 接続のスナップショットを取得
 	h.mu.RLock()
-	conns := make([]*websocket.Conn, 0, len(h.conns))
-	for conn := range h.conns {
-		conns = append(conns, conn)
-	}
-	h.mu.RUnlock()
+	defer h.mu.RUnlock()
 
-	for _, conn := range conns {
-		h.mu.RLock()
-		cs := h.conns[conn]
-		h.mu.RUnlock()
-		if cs == nil {
+	for conn := range h.conns {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			// 送信エラーは無視して他の接続に継続
 			continue
 		}
-		cs.writeMu.Lock()
-		conn.WriteMessage(websocket.TextMessage, data)
-		cs.writeMu.Unlock()
 	}
 	return nil
 }
