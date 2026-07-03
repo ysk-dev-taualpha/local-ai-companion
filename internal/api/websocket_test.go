@@ -81,6 +81,7 @@ func readAllMessages(t *testing.T, conn *websocket.Conn, maxMessages int) []map[
 	}
 	return messages
 }
+
 func TestHandleWS_SendReceive(t *testing.T) {
 	hub := newTestHub()
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
