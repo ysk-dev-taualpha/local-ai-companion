@@ -304,3 +304,27 @@ func TestHandleWS_ConcurrentConnections(t *testing.T) {
 		t.Errorf("expected at most %d connections, got %d", numClients, count)
 	}
 }
+
+func TestHandleWS_ConcurrentTextAcrossConnectionsRace(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	const numClients = 8
+	var wg sync.WaitGroup
+	for i := 0; i < numClients; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn := wsClient(t, srv.URL)
+			msg := WSMessage{Type: "text", Payload: "hello", RequestID: "req"}
+			data, _ := json.Marshal(msg)
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				t.Errorf("write failed: %v", err)
+				return
+			}
+			_, _, _ = conn.ReadMessage()
+		}()
+	}
+	wg.Wait()
+}
