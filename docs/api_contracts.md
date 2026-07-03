@@ -1,5 +1,13 @@
 # API Contracts
 
+## Go Runtime エンドポイント一覧
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/v1/conversation` | 会話リクエストを Python サービスに転送 |
+| GET | `/healthz` | ヘルスチェック |
+| GET | `/ws` | WebSocket 接続（Upgrade） |
+
 ## Assistant Response JSON
 
 ConversationCore が返す assistant response のスキーマ。
@@ -147,3 +155,268 @@ ConversationCore.send() の戻り値:
 - 内部履歴には `valid: false` と `error` メッセージを記録する
 
 エラーレスポンスに API キーや raw secrets、不要な個人情報を含めないこと。
+
+## Go Runtime: /v1/conversation
+
+**メソッド:** `POST`
+
+**リクエストボディ:**
+
+```json
+{
+  "message": "ユーザーの入力テキスト",
+  "conversation_id": "default",
+  "request_id": "32byte-hex-string"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|------|------|
+| `message` | string | **必須** | ユーザーの入力テキスト |
+| `conversation_id` | string | 任意 | 会話セッション識別子。未指定時は Python 側のデフォルト |
+| `request_id` | string | 任意 | リクエスト識別子。未指定時は 32byte ランダム hex 文字列を自動生成 |
+
+**成功レスポンス (200):**
+
+```json
+{
+  "request_id": "a1b2c3d4e5f6...",
+  "conversation_id": "default",
+  "assistant": {
+    "text": "こんにちは、何かお手伝いしましょうか？",
+    "emotion": "happy",
+    "motion": "wave",
+    "speak_style": "normal",
+    "interruptible": true
+  }
+}
+```
+
+**エラーレスポンス:**
+
+| ステータス | コード | 説明 |
+|------------|--------|------|
+| 400 | `invalid_request` | JSON パース失敗、または `message` が空 |
+| 405 | `method_not_allowed` | POST 以外のメソッド |
+| 502 | `python_service_error` | Python サービスのエラー |
+| 504 | `timeout` | リクエストタイムアウト（`RequestTimeoutMs` 設定値） |
+
+エラーレスポンスのフォーマット:
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "message is required"
+  }
+}
+```
+
+実装箇所: `internal/api/handler.go` → `HandleConversation`
+
+## Go Runtime: /healthz
+
+**メソッド:** `GET`
+
+**レスポンス (200):**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+常に 200 を返す。実装箇所: `internal/api/handler.go` → `HandleHealth`
+
+## Go Runtime: /ws — WebSocket
+
+**プロトコル:** WebSocket（`ws://` または `wss://`）。HTTP GET を WebSocket に Upgrade して利用する。
+
+**接続管理:** `WebSocketHub` が `sync.RWMutex` で goroutine-safe に全接続を管理。切断時は自動的にクリーンアップされる。
+
+### WebSocketHub API
+
+| メソッド | シグネチャ | 説明 |
+|----------|-----------|------|
+| `NewWebSocketHub()` | `*WebSocketHub` | Hub を生成 |
+| `HandleWS(w, r)` | `http.HandlerFunc` | `/ws` エンドポイントのハンドラ |
+| `Broadcast(msg)` | `error` | 全接続クライアントにメッセージを一斉送信 |
+| `ConnectionCount()` | `int` | 現在の接続数を返す |
+
+### メッセージフォーマット (WSMessage)
+
+```json
+{
+  "type": "text",
+  "payload": "送信内容",
+  "request_id": "req-001"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|------|------|
+| `type` | string | **必須** | メッセージ種別。任意の文字列 |
+| `payload` | string | **必須** | メッセージ本文 |
+| `request_id` | string | 任意 | リクエスト識別子。`json:"request_id,omitempty"` |
+
+**リクエスト例:**
+
+```json
+{
+  "type": "text",
+  "payload": "Hello, Unity!",
+  "request_id": "req-001"
+}
+```
+
+**レスポンス（ack）:**
+
+サーバーは受信したメッセージに対し、`type` に `_ack` を付加してエコーバックする:
+
+```json
+{
+  "type": "text_ack",
+  "payload": "Hello, Unity!",
+  "request_id": "req-001"
+}
+```
+
+**Broadcast 例:**
+
+```json
+{
+  "type": "broadcast",
+  "payload": "hello all"
+}
+```
+
+Broadcast は全接続クライアントに同じメッセージを送信する。個別の送信エラーは無視され、他の接続への送信は継続される。
+
+**注意事項:**
+
+- 不正な JSON を受信した場合、そのメッセージは無視され接続は維持される
+- `request_id` が空の場合、レスポンスの `request_id` は空文字列になる（`omitempty` によりキー自体が省略される場合もある）
+- 全オリジンを許可（`CheckOrigin: true`）
+- 同時接続は goroutine-safe に管理される
+
+実装箇所: `internal/api/websocket.go` → `HandleWS` / `WebSocketHub`
+
+## StateMachine API
+
+会話状態を管理するステートマシン。許可された遷移のみを実行し、遷移時にコールバックを発火する。
+
+実装箇所: `internal/state/state.go`
+
+### 状態一覧
+
+| 定数 | 値 | 日本語ラベル | 説明 |
+|------|-----|-------------|------|
+| `IDLE` | 0 | 待機中 | 初期状態。会話待ち |
+| `LISTENING` | 1 | 受信中 | ユーザー音声受信中 |
+| `THINKING` | 2 | 思考中 | 応答生成中 |
+| `SPEAKING` | 3 | 発話中 | 音声出力中 |
+
+`State.String()` で日本語ラベルを取得可能。未定義値は `不明(N)` を返す。
+
+### 状態遷移図
+
+```
+         ┌──────────────────┐
+         │                  │
+         ▼                  │
+     ┌──────┐  cancel   ┌──┴───┐
+     │ IDLE │◄──────────│LISTEN│
+     └──┬───┘           └──┬───┘
+        │                  │
+        │ start            │ recognized
+        │                  │
+        ▼                  ▼
+     ┌──────┐           ┌──────┐
+     │LISTEN│           │THINK │
+     └──────┘           └──┬───┘
+                           │
+                 cancel    │ generated
+                    │      │
+                    ▼      ▼
+                 ┌──────┐┌──────┐
+                 │ IDLE ││SPEAK │
+                 └──────┘└──┬───┘
+                            │
+                            │ done
+                            │
+                            ▼
+                         ┌──────┐
+                         │ IDLE │
+                         └──────┘
+```
+
+### 有効な遷移
+
+| from | to | 説明 |
+|------|-----|------|
+| `IDLE` | `LISTENING` | ユーザー発話の聞き取り開始 |
+| `LISTENING` | `THINKING` | 音声認識完了、応答生成開始 |
+| `LISTENING` | `IDLE` | キャンセル（聞き取り中断） |
+| `THINKING` | `SPEAKING` | 応答生成完了、発話開始 |
+| `THINKING` | `IDLE` | キャンセル（生成中断） |
+| `SPEAKING` | `IDLE` | 発話完了 |
+
+同一状態への遷移（例: `IDLE` → `IDLE`）はエラーにならず、コールバックも発火しない（no-op）。
+
+### 無効な遷移
+
+以下の遷移はエラー（`invalid transition: X → Y`）になる:
+
+- `IDLE` → `THINKING`, `SPEAKING`
+- `LISTENING` → `SPEAKING`
+- `THINKING` → `LISTENING`
+- `SPEAKING` → `LISTENING`, `THINKING`
+
+### API
+
+```go
+// 型
+type State int  // iota: IDLE=0, LISTENING=1, THINKING=2, SPEAKING=3
+type StateChangeCallback func(from, to State)
+type StateMachine struct { /* unexported fields */ }
+
+// コンストラクタ
+func New(callback StateChangeCallback) *StateMachine
+
+// メソッド
+func (sm *StateMachine) Current() State
+func (sm *StateMachine) Transition(to State) error
+func (sm *StateMachine) Reset()
+```
+
+#### `New(callback) *StateMachine`
+
+初期状態 `IDLE` で StateMachine を生成する。`callback` が非 nil の場合、有効な遷移時に `callback(from, to)` が呼ばれる。
+
+#### `Current() State`
+
+現在の状態を返す。
+
+#### `Transition(to State) error`
+
+`to` への遷移を試みる。
+
+- 同一状態 → no-op（nil を返す、コールバック発火なし）
+- 無効な遷移 → `fmt.Errorf("invalid transition: %s → %s", from, to)` を返す
+- 有効な遷移 → 状態を更新し、`onChange` コールバックがあれば発火
+
+#### `Reset()`
+
+現在の状態にかかわらず `IDLE` に強制リセットする。実際に状態が変わった場合のみコールバックを発火する（`IDLE` からのリセットは no-op）。
+
+### コールバックの挙動
+
+| 操作 | コールバック発火 | 備考 |
+|------|:--:|------|
+| 有効な遷移 (`IDLE`→`LISTENING`) | ✅ | `from=IDLE, to=LISTENING` |
+| 同一状態遷移 (`IDLE`→`IDLE`) | ❌ | no-op |
+| 無効な遷移 (`IDLE`→`THINKING`) | ❌ | エラーを返す |
+| `Reset()` (非 IDLE から) | ✅ | `from=現在状態, to=IDLE` |
+| `Reset()` (IDLE から) | ❌ | no-op |
+
+実装箇所: `internal/state/state.go`
