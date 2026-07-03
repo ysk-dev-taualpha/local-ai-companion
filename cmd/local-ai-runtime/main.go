@@ -31,10 +31,12 @@ func main() {
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
 	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
+	wsHub := api.NewWebSocketHub()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
 	mux.HandleFunc("/healthz", handler.HandleHealth)
+	mux.HandleFunc("/ws", wsHub.HandleWS)
 
 	server := &http.Server{
 		Addr:    cfg.Runtime.ListenAddr,
