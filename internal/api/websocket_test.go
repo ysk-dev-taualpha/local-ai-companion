@@ -157,7 +157,7 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	conn1 := wsClient(t, srv.URL)
 	conn2 := wsClient(t, srv.URL)
 
-	if hub.ConnectionCount() != 2 {
+	if !waitForConnectionCount(t, hub, 2, 500*time.Millisecond) {
 		t.Errorf("expected 2 connections, got %d", hub.ConnectionCount())
 	}
 
@@ -570,4 +570,58 @@ func TestHandleWS_ConcurrentTextMessages(t *testing.T) {
 	if !foundSecondAIResponse {
 		t.Error("expected second ai_response after returning to IDLE")
 	}
+}
+
+func TestHandleWS_ConcurrentBroadcastWrite(t *testing.T) {
+	// 並行Broadcastとack/error/state書き込みが
+	// 同じ接続に対して競合しないことを検証します（回帰テスト）。
+	hub := newTestHub()
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	conn := wsClient(t, srv.URL)
+	if !waitForConnectionCount(t, hub, 1, 500*time.Millisecond) {
+		t.Fatalf("expected 1 connection, got %d", hub.ConnectionCount())
+	}
+
+	// 読み取り専用goroutine: ブロードキャストを受信し続ける
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	numWriters := 20
+
+	// 並行で複数の Broadcast と ack 書き込みを実行
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			hub.Broadcast(WSStateNotification{
+				Type:  "state_change",
+				State: "BROADCASTING",
+			})
+		}(i)
+	}
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			hub.writeJSON(conn, map[string]interface{}{
+				"type": "ack",
+				"id":   idx,
+			})
+		}(i)
+	}
+
+	wg.Wait()
+	conn.Close()
+	<-done
 }
