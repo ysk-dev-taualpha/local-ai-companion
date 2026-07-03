@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 )
 
 // wsClient はテスト用の WebSocket クライアントヘルパーです。
@@ -38,15 +40,30 @@ func waitForConnectionCount(t *testing.T, hub *WebSocketHub, expected int, timeo
 	return false
 }
 
+// newTestHub はテスト用の WebSocketHub を生成します。
+// mock PythonClient と state.New(nil) で初期化済みです。
+func newTestHub(t *testing.T) *WebSocketHub {
+	t.Helper()
+	mock := &mockPythonClient{
+		resp: &client.ConversationResponse{
+			RequestID: "resp-001",
+			Assistant: client.AssistantMessage{
+				Text: "test response",
+			},
+		},
+	}
+	return NewWebSocketHub(mock, state.New(nil), 5000)
+}
+
 func TestHandleWS_SendReceive(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
 	conn := wsClient(t, srv.URL)
 
 	msg := WSMessage{
-		Type:      "text",
+		Type:      "ping",
 		Payload:   "Hello, Unity!",
 		RequestID: "req-001",
 	}
@@ -66,8 +83,8 @@ func TestHandleWS_SendReceive(t *testing.T) {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if resp["type"] != "text_ack" {
-		t.Errorf("expected type 'text_ack', got %v", resp["type"])
+	if resp["type"] != "ping_ack" {
+		t.Errorf("expected type 'ping_ack', got %v", resp["type"])
 	}
 	if resp["payload"] != "Hello, Unity!" {
 		t.Errorf("expected payload 'Hello, Unity!', got %v", resp["payload"])
@@ -78,7 +95,7 @@ func TestHandleWS_SendReceive(t *testing.T) {
 }
 
 func TestHandleWS_InvalidJSON(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
@@ -106,7 +123,7 @@ func TestHandleWS_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleWS_MultipleConnections(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
@@ -118,7 +135,7 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	}
 
 	// conn1 に送信
-	msg := WSMessage{Type: "text", Payload: "from conn1", RequestID: "r1"}
+	msg := WSMessage{Type: "ping", Payload: "from conn1", RequestID: "r1"}
 	data, _ := json.Marshal(msg)
 	conn1.WriteMessage(websocket.TextMessage, data)
 
@@ -133,7 +150,7 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	}
 
 	// conn2 に送信
-	msg2 := WSMessage{Type: "text", Payload: "from conn2", RequestID: "r2"}
+	msg2 := WSMessage{Type: "ping", Payload: "from conn2", RequestID: "r2"}
 	data2, _ := json.Marshal(msg2)
 	conn2.WriteMessage(websocket.TextMessage, data2)
 
@@ -149,7 +166,7 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 }
 
 func TestHandleWS_ConnectionCountAfterClose(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
@@ -170,7 +187,7 @@ func TestHandleWS_ConnectionCountAfterClose(t *testing.T) {
 }
 
 func TestHandleWS_Broadcast(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
@@ -216,14 +233,14 @@ func TestHandleWS_Broadcast(t *testing.T) {
 }
 
 func TestHandleWS_EmptyRequestID(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
 	conn := wsClient(t, srv.URL)
 
 	msg := WSMessage{
-		Type:    "text",
+		Type:    "ping",
 		Payload: "no request id",
 		// RequestID は空
 	}
@@ -244,13 +261,13 @@ func TestHandleWS_EmptyRequestID(t *testing.T) {
 			t.Logf("request_id present: %v", rid)
 		}
 	}
-	if resp["type"] != "text_ack" {
-		t.Errorf("expected type 'text_ack', got %v", resp["type"])
+	if resp["type"] != "ping_ack" {
+		t.Errorf("expected type 'ping_ack', got %v", resp["type"])
 	}
 }
 
 func TestHandleWS_ConcurrentConnections(t *testing.T) {
-	hub := NewWebSocketHub()
+	hub := newTestHub(t)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 
@@ -264,7 +281,7 @@ func TestHandleWS_ConcurrentConnections(t *testing.T) {
 			conn := wsClient(t, srv.URL)
 
 			msg := WSMessage{
-				Type:      "text",
+				Type:      "ping",
 				Payload:   "msg",
 				RequestID: "req",
 			}
