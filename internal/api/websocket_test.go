@@ -46,17 +46,17 @@ func wsClient(t *testing.T, url string) *websocket.Conn {
 }
 
 // waitForConnectionCount は接続数が期待値になるまでポーリングします。
-// タイムアウトに達した場合は false を返します（CI でのレースコンディション対策）。
-func waitForConnectionCount(t *testing.T, hub *WebSocketHub, expected int, timeout time.Duration) bool {
+// タイムアウトに達した場合はテストを失敗させます。
+func waitForConnectionCount(t *testing.T, hub *WebSocketHub, want int) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if hub.ConnectionCount() == expected {
-			return true
+		if got := hub.ConnectionCount(); got == want {
+			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	return false
+	t.Fatalf("expected %d connections, got %d", want, hub.ConnectionCount())
 }
 
 // readAllMessages は WebSocket から全メッセージを読み取り、タイプ→ペイロードのマップを返します。
@@ -157,9 +157,7 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	conn1 := wsClient(t, srv.URL)
 	conn2 := wsClient(t, srv.URL)
 
-	if !waitForConnectionCount(t, hub, 2, 500*time.Millisecond) {
-		t.Errorf("expected 2 connections, got %d", hub.ConnectionCount())
-	}
+	waitForConnectionCount(t, hub, 2)
 
 	// conn1 に送信
 	msg := WSMessage{Type: "ping", Payload: "from conn1", RequestID: "r1"}
@@ -198,19 +196,11 @@ func TestHandleWS_ConnectionCountAfterClose(t *testing.T) {
 	defer srv.Close()
 
 	conn := wsClient(t, srv.URL)
-
-	// goroutine のスケジューリングによるレースを回避し、接続登録を待つ
-	if !waitForConnectionCount(t, hub, 1, 500*time.Millisecond) {
-		t.Errorf("expected 1 connection, got %d", hub.ConnectionCount())
-	}
+	waitForConnectionCount(t, hub, 1)
 
 	conn.Close()
 
-	// 切断後に接続数が0になることを確認（goroutine の実行を待つ）
-	// 切断検知は次の ReadMessage で発生するので、ここでは単に接続が切れたことを確認
-	if hub.ConnectionCount() < 0 {
-		t.Errorf("connection count should not be negative")
-	}
+	waitForConnectionCount(t, hub, 0)
 }
 
 func TestHandleWS_Broadcast(t *testing.T) {
@@ -580,9 +570,7 @@ func TestHandleWS_ConcurrentBroadcastWrite(t *testing.T) {
 	defer srv.Close()
 
 	conn := wsClient(t, srv.URL)
-	if !waitForConnectionCount(t, hub, 1, 500*time.Millisecond) {
-		t.Fatalf("expected 1 connection, got %d", hub.ConnectionCount())
-	}
+	waitForConnectionCount(t, hub, 1)
 
 	// 読み取り専用goroutine: ブロードキャストを受信し続ける
 	done := make(chan struct{})
@@ -624,4 +612,45 @@ func TestHandleWS_ConcurrentBroadcastWrite(t *testing.T) {
 	wg.Wait()
 	conn.Close()
 	<-done
+}
+
+func TestHandleWS_ConcurrentBroadcasts(t *testing.T) {
+	hub := newTestHub()
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	conn := wsClient(t, srv.URL)
+	waitForConnectionCount(t, hub, 1)
+
+	const broadcastCount = 20
+	readErr := make(chan error, 1)
+	go func() {
+		if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			readErr <- err
+			return
+		}
+		for i := 0; i < broadcastCount; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				readErr <- err
+				return
+			}
+		}
+		readErr <- nil
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < broadcastCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := hub.Broadcast(WSMessage{Type: "broadcast", Payload: "hello"}); err != nil {
+				t.Errorf("broadcast failed: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := <-readErr; err != nil {
+		t.Fatalf("failed to read broadcasts: %v", err)
+	}
 }
