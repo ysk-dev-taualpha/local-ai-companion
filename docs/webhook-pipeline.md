@@ -13,6 +13,6 @@ check_suite (success) → 自動マージ判定
 
 ## 疎通確認
 
-- 2025-07-03: Issue #55 で webhook → Hermes → gh CLI → PR 作成の疎通を確認
+- 2026-07-03: Issue #55 で webhook → Hermes → gh CLI → PR 作成の疎通を確認
 - Hermes は `gh` CLI で GitHub 操作（MCP 不使用）
 - 認証: `~/.hermes/.env` の `GH_TOKEN` を使用
