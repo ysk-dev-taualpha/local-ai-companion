@@ -45,6 +45,14 @@ namespace AICompanion
         public string state;
     }
 
+    [Serializable]
+    public class ErrorJson
+    {
+        public string type;
+        public string request_id;
+        public string error;
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("UI References")]
@@ -211,6 +219,20 @@ namespace AICompanion
                         {
                             AppendResponse($"<color=#66ccff>AI:</color> {aiResp.assistant.text}");
                         }
+                        SetSendingState(false);
+                        return;
+                    }
+                }
+                catch { /* 別タイプ */ }
+
+                try
+                {
+                    // error レスポンス（Python service error / timeout 等）
+                    var errResp = JsonUtility.FromJson<ErrorJson>(json);
+                    if (errResp.type == "error")
+                    {
+                        var errMsg = errResp.error ?? "Unknown error";
+                        AppendResponse($"<color=#ff6666>[Server Error] {errMsg}</color>");
                         SetSendingState(false);
                         return;
                     }

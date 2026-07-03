@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -128,6 +129,7 @@ namespace AICompanion
         private async Task ReceiveLoopAsync(CancellationToken ct)
         {
             var buffer = new byte[ReceiveBufferSize];
+            var fragments = new List<byte>();
 
             try
             {
@@ -148,9 +150,16 @@ namespace AICompanion
 
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
-                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        Debug.Log($"[WebSocketClient] Received: {message}");
-                        OnMessageReceived?.Invoke(message);
+                        // フレーム断片を蓄積
+                        fragments.AddRange(new ArraySegment<byte>(buffer, 0, result.Count));
+
+                        if (result.EndOfMessage)
+                        {
+                            var message = Encoding.UTF8.GetString(fragments.ToArray());
+                            fragments.Clear();
+                            Debug.Log($"[WebSocketClient] Received: {message}");
+                            OnMessageReceived?.Invoke(message);
+                        }
                     }
                 }
             }
