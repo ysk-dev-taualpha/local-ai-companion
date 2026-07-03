@@ -5,7 +5,7 @@ import unittest
 from http.client import HTTPConnection
 
 from local_ai_companion.config import AppConfig
-from local_ai_companion.server import run_server
+from local_ai_companion.server import run_server, _make_handler
 
 
 class TestHTTPServer:
@@ -19,7 +19,6 @@ class TestHTTPServer:
         from http.server import HTTPServer
         from local_ai_companion.conversation import ConversationCore
         from local_ai_companion.providers import create_provider
-        from local_ai_companion.server import _make_handler
 
         provider = create_provider(config.llm.provider, config.llm)
         core = ConversationCore(provider=provider, max_history_turns=config.conversation.max_history_turns)
@@ -48,6 +47,17 @@ class TestHTTPServer:
         data = resp.read().decode("utf-8")
         conn.close()
         return resp.status, json.loads(data)
+
+    def raw_request(self, method, path, body_bytes, headers=None):
+        """Send raw bytes without JSON encoding — for testing malformed requests."""
+        if headers is None:
+            headers = {}
+        conn = HTTPConnection("127.0.0.1", self._port, timeout=2)
+        conn.request(method, path, body=body_bytes, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read().decode("utf-8")
+        conn.close()
+        return resp.status, data
 
 
 class ServerIntegrationTests(unittest.TestCase):
@@ -90,6 +100,54 @@ class ServerIntegrationTests(unittest.TestCase):
                                            {"message": "hi", "conversation_id": "session-1"})
         self.assertEqual(status, 200)
         self.assertEqual(data["conversation_id"], "session-1")
+
+    def test_whitespace_only_message_returns_400(self):
+        status, data = self.server.request("POST", "/v1/conversation",
+                                           {"message": "   "})
+        self.assertEqual(status, 400)
+        self.assertIn("error", data)
+
+    def test_empty_string_message_returns_400(self):
+        status, data = self.server.request("POST", "/v1/conversation",
+                                           {"message": ""})
+        self.assertEqual(status, 400)
+        self.assertIn("error", data)
+
+    def test_message_not_string_returns_400(self):
+        status, data = self.server.request("POST", "/v1/conversation",
+                                           {"message": 123})
+        self.assertEqual(status, 400)
+        self.assertIn("error", data)
+
+    def test_wrong_path_drains_body(self):
+        """Test that wrong path still drains the request body without error."""
+        status, data = self.server.request("POST", "/nonexistent",
+                                           {"message": "hi", "extra": "data"})
+        self.assertEqual(status, 404)
+
+    def test_missing_content_length_handled(self):
+        """Test that missing Content-Length header is handled gracefully."""
+        status, raw = self.server.raw_request(
+            "POST", "/v1/conversation",
+            body_bytes=json.dumps({"message": "hi"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        self.assertEqual(status, 200)
+
+
+class MakeHandlerTests(unittest.TestCase):
+    def test_make_handler_returns_handler_class(self):
+        from local_ai_companion.conversation import ConversationCore
+        from local_ai_companion.providers import create_provider
+
+        config = AppConfig()
+        provider = create_provider(config.llm.provider, config.llm)
+        core = ConversationCore(provider=provider, max_history_turns=config.conversation.max_history_turns)
+
+        handler_class = _make_handler(core, config)
+        self.assertIsNotNone(handler_class)
+        self.assertEqual(handler_class.core, core)
+        self.assertEqual(handler_class.config, config)
 
 
 if __name__ == "__main__":
