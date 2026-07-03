@@ -132,6 +132,7 @@ PR 作成者は自分の PR を approve しません。
 - 1件以上の approve review
 - CI テスト通過
 - レビューコメントがすべて解決済み
+- 明示的なマージ委譲があること
 
 ## Issue Template for Agents
 

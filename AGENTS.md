@@ -60,7 +60,7 @@ runtime: add request timeout handling
 - 必ず `Closes #N` または `Refs #N` でIssueを参照
 - `ysk0518` に review request を送る
 - 自分のPRを自分でapproveしない
-- mergeは原則人間が判断。自動マージ条件（approve + test pass + resolved）を満たせば委譲可
+- mergeは原則人間が判断。自動マージ条件（approve + test pass + resolved + 明示的なマージ委譲）を満たせば委譲可
 
 ## 相互レビュー
 
