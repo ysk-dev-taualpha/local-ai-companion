@@ -8,7 +8,7 @@ Owns product direction, final prioritization, environment decisions, and accepta
 
 ### Codex
 
-Acts as the primary design, planning, implementation, and review agent.
+Primary design, review, and coding agent. Also handles implementation when appropriate.
 
 Expected work:
 
@@ -18,26 +18,47 @@ Expected work:
 - Make scoped code changes
 - Add or update tests when appropriate
 - Update docs when behavior or architecture changes
-- Review Hermes changes when asked
+- Review Hermes and Gemma changes
 - Avoid reverting unrelated work
 
 ### Hermes
 
-Acts as an implementation-focused agent.
+Implementation, review, and design agent. Participates in mutual review with Codex.
 
 Expected work:
 
 - Read relevant docs before editing
 - Make scoped code changes
 - Add or update tests when appropriate
-- Update docs only when the assigned issue explicitly asks for it or implementation behavior requires a narrow documentation correction
+- Update docs when behavior or architecture changes
+- Review Codex changes
+- Propose design improvements (as comments or issues, not unrequested implementation)
 - Avoid reverting unrelated work
 
-Hermes should not make independent design decisions.
+### Gemma
 
-If Hermes finds that an assigned task appears to require architecture changes, public API changes, dependency additions, storage format changes, directory layout changes, or broad refactoring, Hermes should stop implementation and leave an issue or pull request comment asking for direction.
+Mechanical review and documentation agent. Lightweight, runs on local Ollama (Gemma 4 26B).
 
-Hermes should treat the assigned issue body as the implementation contract.
+Expected work:
+
+- Mechanical code checks: typos, missing imports, obvious bugs
+- Documentation completeness checks
+- Does NOT handle: architecture decisions, performance analysis, complex logic review
+
+## Webhook-Driven Automation
+
+The development pipeline is event-driven via GitHub webhooks:
+
+| Event | Trigger |
+|---|---|
+| `issues` | Issue created → implementation starts |
+| `pull_request` (opened/synchronize) | PR opened or updated → Codex review |
+| `pull_request_review` | Review submitted → respond or fix |
+| `issue_comment` (@codex) | Codex handles design or coding request |
+| `issue_comment` (@gemma) | Gemma runs mechanical check |
+| `check_suite` (completed) | CI passed → auto-merge if conditions met |
+
+All agents are notified of relevant events and can respond autonomously.
 
 ## Shared Rules
 
@@ -52,42 +73,9 @@ Hermes should treat the assigned issue body as the implementation contract.
 - Prefer small, reviewable changes.
 - Keep generated logs, local environment files, secrets, and build artifacts out of source control.
 
-## Design Control
+## Mutual Review
 
-Design authority is intentionally centralized during the pilot phase.
-
-- The human developer owns product direction, priorities, and final acceptance.
-- Codex prepares design proposals, breaks work into issues, and reviews design impact.
-- Hermes implements approved issues and should avoid expanding scope.
-
-This keeps Hermes effective for implementation while preventing multiple agents from changing architecture independently.
-
-Hermes may suggest improvements, but suggestions should be comments, not unrequested implementation changes.
-
-## Hermes Implementation Boundary
-
-Hermes may do:
-
-- Implement the assigned issue
-- Add or update tests required by the assigned issue
-- Make small local refactors needed for the assigned implementation
-- Open a pull request for review
-- Respond to review comments on the same branch
-
-Hermes should not do without explicit approval:
-
-- Change architecture or module boundaries
-- Change public API contracts or response schemas
-- Add dependencies
-- Change storage formats
-- Change repository layout
-- Modify GitHub issue scope, priority, or completion conditions
-- Close issues or merge pull requests
-- Perform broad cleanup outside the assigned issue
-
-## Review Policy
-
-Every meaningful code change should be reviewable by at least one other participant.
+All agents participate in mutual review. Every meaningful code change should be reviewable by at least one other agent.
 
 Review priority:
 
@@ -100,6 +88,14 @@ Review priority:
 7. Maintainability issues
 
 Review comments should reference files and lines when possible.
+
+Default review pairing:
+
+- Codex changes → reviewed by Hermes or human
+- Hermes changes → reviewed by Codex or human
+- Gemma changes → reviewed by Hermes or Codex
+
+No agent should approve their own PR.
 
 ## Task Lifecycle
 
@@ -117,7 +113,7 @@ Check whether the task affects:
 - storage format
 - user-facing behavior
 
-If yes, Codex may propose the relevant doc update. Hermes should ask for direction before making the change unless the issue explicitly instructs it.
+If yes, propose the relevant doc update or ask for direction before making the change.
 
 ### 3. Implement
 
@@ -140,10 +136,12 @@ Ask another participant to review when the change is meaningful.
 ## Suggested Branch Naming
 
 ```text
-feature/v0.1-response-schema
-feature/v0.1-llm-provider
+codex/issue-4-response-schema
+hermes/issue-5-provider-interface
+gemma/issue-8-typo-fix
+feature/v0.1-cli
+docs/branch-strategy
 fix/v0.1-json-fallback
-docs/architecture-runtime-split
 ```
 
 ## Suggested Commit Message Style
