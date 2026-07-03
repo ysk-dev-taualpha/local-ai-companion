@@ -14,6 +14,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/config"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 )
 
 func main() {
@@ -31,7 +32,8 @@ func main() {
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
 	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
-	wsHub := api.NewWebSocketHub()
+	stateMachine := state.New(nil)
+	wsHub := api.NewWebSocketHub(pythonClient, stateMachine, cfg.Runtime.RequestTimeoutMs)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
