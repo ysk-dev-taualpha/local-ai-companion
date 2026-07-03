@@ -51,6 +51,7 @@ type wsConnState struct {
 // 受信したテキストを AI Service に転送して応答を返します。
 type WebSocketHub struct {
 	mu               sync.RWMutex
+	stateMu          sync.Mutex
 	conns            map[*websocket.Conn]*wsConnState
 	pythonClient     PythonClient
 	stateMachine     *state.StateMachine
@@ -110,6 +111,9 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 // handleTextMessage はテキストメッセージを AI Service に転送し、
 // StateMachine の状態遷移をブロードキャストします。
 func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
+
 	// IDLE→LISTENING 遷移
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
