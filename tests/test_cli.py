@@ -1,7 +1,10 @@
+import io
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from local_ai_companion.cli import build_parser, run_once
+from local_ai_companion.cli import build_parser, run_once, main, _make_log_writer
 from local_ai_companion.config import AppConfig
 
 
@@ -45,14 +48,10 @@ class CLITests(unittest.TestCase):
             writer = JSONLLogWriter(tmpdir)
             exit_code = run_once(config, "session", "req-1", "hello", writer)
             self.assertEqual(exit_code, 0)
-            import os
             log_path = os.path.join(tmpdir, "conversation.jsonl")
             self.assertTrue(os.path.isfile(log_path))
 
     def test_run_once_uses_request_id_in_output(self):
-        import io
-        import sys
-
         config = AppConfig()
         old_stdout = sys.stdout
         try:
@@ -64,6 +63,65 @@ class CLITests(unittest.TestCase):
             self.assertIn("c1", output)
         finally:
             sys.stdout = old_stdout
+
+
+import sys  # noqa: E402 (needed for test_run_once_uses_request_id_in_output above)
+
+
+class MakeLogWriterTests(unittest.TestCase):
+    def test_with_log_dir_arg(self):
+        config = AppConfig()
+        writer = _make_log_writer(config, "/tmp/test_logs")
+        self.assertIsNotNone(writer)
+        from local_ai_companion.log_writer import JSONLLogWriter
+        self.assertIsInstance(writer, JSONLLogWriter)
+
+    def test_with_config_logging_enabled(self):
+        from local_ai_companion.config import LoggingConfig
+        config = AppConfig(logging=LoggingConfig(enabled=True, log_dir="/tmp/test_config_logs"))
+        writer = _make_log_writer(config, None)
+        self.assertIsNotNone(writer)
+
+    def test_disabled_returns_none(self):
+        config = AppConfig()
+        writer = _make_log_writer(config, None)
+        self.assertIsNone(writer)
+
+    def test_log_dir_arg_overrides_config(self):
+        from local_ai_companion.config import LoggingConfig
+        config = AppConfig(logging=LoggingConfig(enabled=True, log_dir="/tmp/from_config"))
+        writer = _make_log_writer(config, "/tmp/from_arg")
+        self.assertIsNotNone(writer)
+
+
+class MainTests(unittest.TestCase):
+    def test_main_with_message(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            exit_code = main(["--message", "hello", "--request-id", "req-main"])
+            self.assertEqual(exit_code, 0)
+            output = mock_stdout.getvalue()
+            self.assertIn("req-main", output)
+            self.assertIn("assistant", output)
+
+    def test_main_with_serve_flag(self):
+        with patch("local_ai_companion.server.run_server") as mock_run:
+            exit_code = main(["--serve"])
+            self.assertEqual(exit_code, 0)
+            mock_run.assert_called_once()
+
+    def test_main_without_message_uses_repl(self):
+        # Simulate REPL by providing a single input then EOF
+        with patch("sys.stdout", new_callable=io.StringIO):
+            with patch("builtins.input", side_effect=["hello from repl", EOFError]):
+                exit_code = main([])
+                self.assertEqual(exit_code, 0)
+
+    def test_main_with_custom_conversation_id(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            exit_code = main(["--message", "hi", "--conversation-id", "custom-session"])
+            self.assertEqual(exit_code, 0)
+            output = mock_stdout.getvalue()
+            self.assertIn("custom-session", output)
 
 
 if __name__ == "__main__":
