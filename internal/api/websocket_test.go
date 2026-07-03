@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -21,6 +22,20 @@ func wsClient(t *testing.T, url string) *websocket.Conn {
 	}
 	t.Cleanup(func() { conn.Close() })
 	return conn
+}
+
+// waitForConnectionCount は接続数が期待値になるまでポーリングします。
+// タイムアウトに達した場合は false を返します（CI でのレースコンディション対策）。
+func waitForConnectionCount(t *testing.T, hub *WebSocketHub, expected int, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if hub.ConnectionCount() == expected {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 func TestHandleWS_SendReceive(t *testing.T) {
@@ -139,7 +154,9 @@ func TestHandleWS_ConnectionCountAfterClose(t *testing.T) {
 	defer srv.Close()
 
 	conn := wsClient(t, srv.URL)
-	if hub.ConnectionCount() != 1 {
+
+	// goroutine のスケジューリングによるレースを回避し、接続登録を待つ
+	if !waitForConnectionCount(t, hub, 1, 500*time.Millisecond) {
 		t.Errorf("expected 1 connection, got %d", hub.ConnectionCount())
 	}
 
