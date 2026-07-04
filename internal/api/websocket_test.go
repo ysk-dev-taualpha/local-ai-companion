@@ -52,7 +52,7 @@ func newTestHub(t *testing.T) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, state.New(nil), 5000)
+	return NewWebSocketHub(mock, state.New(nil), 5000, nil)
 }
 
 func TestHandleWS_SendReceive(t *testing.T) {
@@ -130,7 +130,8 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	conn1 := wsClient(t, srv.URL)
 	conn2 := wsClient(t, srv.URL)
 
-	if hub.ConnectionCount() != 2 {
+	// 接続登録を待つ（goroutine スケジューリングのレース対策）
+	if !waitForConnectionCount(t, hub, 2, 500*time.Millisecond) {
 		t.Errorf("expected 2 connections, got %d", hub.ConnectionCount())
 	}
 
@@ -327,4 +328,167 @@ func TestHandleWS_ConcurrentTextAcrossConnectionsRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// ─── buildCheckOrigin ユニットテスト ───
+
+func TestBuildCheckOrigin_DefaultLocalhost(t *testing.T) {
+	check := buildCheckOrigin(nil)
+
+	// Origin ヘッダなし → 許可 (same-origin / 非ブラウザクライアント)
+	req, _ := http.NewRequest("GET", "/ws", nil)
+	if !check(req) {
+		t.Error("expected true for request without Origin header")
+	}
+
+	// localhost 許可
+	req.Header.Set("Origin", "http://localhost:8080")
+	if !check(req) {
+		t.Error("expected true for http://localhost:8080")
+	}
+
+	// 127.0.0.1 許可
+	req.Header.Set("Origin", "http://127.0.0.1:12345")
+	if !check(req) {
+		t.Error("expected true for http://127.0.0.1:12345")
+	}
+
+	// ::1 許可
+	req.Header.Set("Origin", "http://[::1]:8080")
+	if !check(req) {
+		t.Error("expected true for http://[::1]:8080")
+	}
+}
+
+func TestBuildCheckOrigin_DefaultRejectExternal(t *testing.T) {
+	check := buildCheckOrigin(nil)
+
+	// 外部オリジン拒否
+	req, _ := http.NewRequest("GET", "/ws", nil)
+	req.Header.Set("Origin", "http://192.168.1.1:8080")
+	if check(req) {
+		t.Error("expected false for http://192.168.1.1:8080")
+	}
+
+	// 別のホスト名拒否
+	req.Header.Set("Origin", "http://evil.example.com")
+	if check(req) {
+		t.Error("expected false for http://evil.example.com")
+	}
+}
+
+func TestBuildCheckOrigin_EmptyAllowedOrigins(t *testing.T) {
+	// 明示的に空スライス → localhost のみ許可
+	check := buildCheckOrigin([]string{})
+
+	req, _ := http.NewRequest("GET", "/ws", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	if !check(req) {
+		t.Error("expected true for localhost with empty allowed list")
+	}
+
+	req.Header.Set("Origin", "http://192.168.1.1:8080")
+	if check(req) {
+		t.Error("expected false for external origin with empty allowed list")
+	}
+}
+
+func TestBuildCheckOrigin_SpecificOrigins(t *testing.T) {
+	allowed := []string{
+		"http://192.168.12.107:8080",
+		"http://example.com",
+	}
+	check := buildCheckOrigin(allowed)
+
+	// リスト内のオリジン → 許可
+	req, _ := http.NewRequest("GET", "/ws", nil)
+	req.Header.Set("Origin", "http://192.168.12.107:8080")
+	if !check(req) {
+		t.Error("expected true for http://192.168.12.107:8080")
+	}
+
+	req.Header.Set("Origin", "http://example.com")
+	if !check(req) {
+		t.Error("expected true for http://example.com")
+	}
+
+	// リスト外のオリジン → 拒否（localhost もデフォルト動作ではない）
+	req.Header.Set("Origin", "http://localhost:8080")
+	if check(req) {
+		t.Error("expected false for localhost when specific origins are set")
+	}
+
+	req.Header.Set("Origin", "http://other.example.com")
+	if check(req) {
+		t.Error("expected false for http://other.example.com")
+	}
+}
+
+// ─── CheckOrigin 統合テスト ───
+
+// testCheckOriginHub は特定の allowedOrigins で hub を作るヘルパー
+func testCheckOriginHub(t *testing.T, allowedOrigins []string) *WebSocketHub {
+	t.Helper()
+	mock := &mockPythonClient{
+		resp: &client.ConversationResponse{
+			RequestID: "resp-001",
+			Assistant: client.AssistantMessage{
+				Text: "test response",
+			},
+		},
+	}
+	return NewWebSocketHub(mock, state.New(nil), 5000, allowedOrigins)
+}
+
+func TestHandleWS_CheckOrigin_AllowedOrigin(t *testing.T) {
+	allowed := []string{"http://127.0.0.1"}
+	hub := testCheckOriginHub(t, allowed)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	// dialer に Origin を設定
+	dialer := websocket.Dialer{}
+	header := http.Header{}
+	header.Set("Origin", "http://127.0.0.1")
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := dialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("expected connection from allowed origin, got error: %v", err)
+	}
+	conn.Close()
+}
+
+func TestHandleWS_CheckOrigin_RejectedOrigin(t *testing.T) {
+	allowed := []string{"http://192.168.12.107:8080"}
+	hub := testCheckOriginHub(t, allowed)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	dialer := websocket.Dialer{}
+	header := http.Header{}
+	header.Set("Origin", "http://evil.example.com")
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	_, _, err := dialer.Dial(wsURL, header)
+	if err == nil {
+		t.Error("expected connection to be rejected for non-allowed origin")
+	}
+}
+
+func TestHandleWS_CheckOrigin_DefaultRejectExternal(t *testing.T) {
+	// デフォルト (nil allowedOrigins = localhost only) で外部オリジンが拒否される
+	hub := testCheckOriginHub(t, nil)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	dialer := websocket.Dialer{}
+	header := http.Header{}
+	header.Set("Origin", "http://192.168.1.1:8080")
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	_, _, err := dialer.Dial(wsURL, header)
+	if err == nil {
+		t.Error("expected connection to be rejected for external origin with default config")
+	}
 }
