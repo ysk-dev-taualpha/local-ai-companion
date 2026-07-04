@@ -130,7 +130,8 @@ func TestHandleWS_MultipleConnections(t *testing.T) {
 	conn1 := wsClient(t, srv.URL)
 	conn2 := wsClient(t, srv.URL)
 
-	if hub.ConnectionCount() != 2 {
+	// 接続登録を待つ（goroutine スケジューリングのレース対策）
+	if !waitForConnectionCount(t, hub, 2, 500*time.Millisecond) {
 		t.Errorf("expected 2 connections, got %d", hub.ConnectionCount())
 	}
 
