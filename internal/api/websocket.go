@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,13 +14,6 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 )
-
-// upgrader は HTTP 接続を WebSocket にアップグレードします。
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
 
 // WSMessage は WebSocket で送受信する JSON メッセージのフォーマットです。
 type WSMessage struct {
@@ -29,11 +24,11 @@ type WSMessage struct {
 
 // WSAIResponse は AI 応答を含む WebSocket レスポンスです。
 type WSAIResponse struct {
-	Type           string                  `json:"type"`
-	RequestID      string                  `json:"request_id"`
-	ConversationID string                  `json:"conversation_id,omitempty"`
+	Type           string                   `json:"type"`
+	RequestID      string                   `json:"request_id"`
+	ConversationID string                   `json:"conversation_id,omitempty"`
 	Assistant      *client.AssistantMessage `json:"assistant,omitempty"`
-	Error          string                  `json:"error,omitempty"`
+	Error          string                   `json:"error,omitempty"`
 }
 
 // WSStateNotification は状態変化をブロードキャストするメッセージです。
@@ -56,15 +51,17 @@ type WebSocketHub struct {
 	pythonClient     PythonClient
 	stateMachine     *state.StateMachine
 	requestTimeoutMs int
+	allowedOrigins   []string
 }
 
 // NewWebSocketHub は新しい WebSocketHub を生成します。
-func NewWebSocketHub(pythonClient PythonClient, stateMachine *state.StateMachine, requestTimeoutMs int) *WebSocketHub {
+func NewWebSocketHub(pythonClient PythonClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string) *WebSocketHub {
 	return &WebSocketHub{
 		conns:            make(map[*websocket.Conn]*wsConnState),
 		pythonClient:     pythonClient,
 		stateMachine:     stateMachine,
 		requestTimeoutMs: requestTimeoutMs,
+		allowedOrigins:   cleanOrigins(allowedOrigins),
 	}
 }
 
@@ -72,6 +69,9 @@ func NewWebSocketHub(pythonClient PythonClient, stateMachine *state.StateMachine
 // テキストメッセージ受信時に AI Service へ転送し、
 // StateMachine の状態遷移（LISTENING → THINKING → SPEAKING → IDLE）をブロードキャストします。
 func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: h.checkOrigin,
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -258,4 +258,60 @@ func (h *WebSocketHub) ConnectionCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.conns)
+}
+
+func (h *WebSocketHub) checkOrigin(r *http.Request) bool {
+	return isAllowedOrigin(r.Header.Get("Origin"), h.allowedOrigins)
+}
+
+func isAllowedOrigin(origin string, allowedOrigins []string) bool {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return true
+	}
+
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil || parsedOrigin.Scheme == "" || parsedOrigin.Host == "" {
+		return false
+	}
+
+	if len(allowedOrigins) == 0 {
+		return isLocalhost(parsedOrigin.Hostname())
+	}
+
+	normalizedOrigin := normalizeOrigin(parsedOrigin)
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" {
+			return true
+		}
+		parsedAllowed, err := url.Parse(allowed)
+		if err != nil || parsedAllowed.Scheme == "" || parsedAllowed.Host == "" {
+			continue
+		}
+		if normalizeOrigin(parsedAllowed) == normalizedOrigin {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanOrigins(origins []string) []string {
+	cleaned := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		cleaned = append(cleaned, origin)
+	}
+	return cleaned
+}
+
+func normalizeOrigin(u *url.URL) string {
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func isLocalhost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

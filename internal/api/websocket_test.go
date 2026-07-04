@@ -52,7 +52,60 @@ func newTestHub(t *testing.T) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, state.New(nil), 5000)
+	return NewWebSocketHub(mock, state.New(nil), 5000, nil)
+}
+
+func TestHandleWS_DefaultOriginPolicy(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Origin": []string{"http://localhost:3000"},
+	})
+	if err != nil {
+		t.Fatalf("expected localhost origin to connect: %v", err)
+	}
+	conn.Close()
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Origin": []string{"http://example.com"},
+	})
+	if err == nil {
+		t.Fatal("expected non-localhost origin to be rejected")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for rejected origin, got resp=%v err=%v", resp, err)
+	}
+}
+
+func TestHandleWS_ConfiguredOriginPolicy(t *testing.T) {
+	mock := &mockPythonClient{}
+	hub := NewWebSocketHub(mock, state.New(nil), 5000, []string{"http://allowed.example:5173"})
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Origin": []string{"http://allowed.example:5173"},
+	})
+	if err != nil {
+		t.Fatalf("expected configured origin to connect: %v", err)
+	}
+	conn.Close()
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Origin": []string{"http://localhost:3000"},
+	})
+	if err == nil {
+		t.Fatal("expected unconfigured origin to be rejected")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for rejected origin, got resp=%v err=%v", resp, err)
+	}
 }
 
 func TestHandleWS_SendReceive(t *testing.T) {

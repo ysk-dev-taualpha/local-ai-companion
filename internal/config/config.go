@@ -10,6 +10,10 @@ type RuntimeConfig struct {
 	RequestTimeoutMs int    `json:"request_timeout_ms"`
 }
 
+type WebSocketConfig struct {
+	AllowedOrigins []string `json:"allowed_origins"`
+}
+
 type PythonServiceConfig struct {
 	BaseURL string `json:"base_url"`
 }
@@ -20,6 +24,7 @@ type LoggingConfig struct {
 
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
+	WebSocket     WebSocketConfig     `json:"websocket"`
 	PythonService PythonServiceConfig `json:"python_service"`
 	Logging       LoggingConfig       `json:"logging"`
 }

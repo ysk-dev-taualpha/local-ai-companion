@@ -20,7 +20,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadFromFile(t *testing.T) {
-	data := `{"runtime":{"listen_addr":"0.0.0.0:9090","request_timeout_ms":5000}}`
+	data := `{"runtime":{"listen_addr":"0.0.0.0:9090","request_timeout_ms":5000},"websocket":{"allowed_origins":["http://localhost:3000","http://127.0.0.1:5173"]}}`
 	f, err := os.CreateTemp("", "config-*.json")
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +38,12 @@ func TestLoadFromFile(t *testing.T) {
 	}
 	if cfg.Runtime.RequestTimeoutMs != 5000 {
 		t.Errorf("expected 5000, got %d", cfg.Runtime.RequestTimeoutMs)
+	}
+	if len(cfg.WebSocket.AllowedOrigins) != 2 {
+		t.Fatalf("expected 2 allowed origins, got %d", len(cfg.WebSocket.AllowedOrigins))
+	}
+	if cfg.WebSocket.AllowedOrigins[0] != "http://localhost:3000" {
+		t.Errorf("unexpected first allowed origin: %s", cfg.WebSocket.AllowedOrigins[0])
 	}
 }
 
