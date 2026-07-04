@@ -15,7 +15,10 @@ WebSocket に接続できない場合は HTTP API へフォールバックしま
 ```
 unity/v0.3-text-connection/
 ├── README.md
+├── Packages/
+├── ProjectSettings/
 └── Assets/
+    ├── Scenes/
     └── Scripts/
         ├── WebSocketClient.cs   # WebSocket クライアント（自動再接続付き）
         └── UIManager.cs         # UI 自動生成 + UI 制御 + メインディスパッチャ
@@ -23,10 +26,10 @@ unity/v0.3-text-connection/
 
 ## セットアップ手順
 
-### 1. Unity プロジェクト作成
+### 1. Unity プロジェクトを開く
 
-Unity Hub で新規 2D プロジェクトを作成し、
-`Assets/Scripts/` に上記2ファイルをコピーしてください。
+Unity Hub で `unity/v0.3-text-connection/` をプロジェクトとして開いてください。
+`Packages/`、`ProjectSettings/`、シーンファイルは同梱済みです。
 
 ### 2. シーン構築
 
