@@ -10,6 +10,13 @@ type RuntimeConfig struct {
 	RequestTimeoutMs int    `json:"request_timeout_ms"`
 }
 
+// WebSocketConfig は WebSocket 接続の設定です。
+type WebSocketConfig struct {
+	// AllowedOrigins は許可する Origin のリストです。
+	// 空の場合は localhost のみ許可します。
+	AllowedOrigins []string `json:"allowed_origins"`
+}
+
 type PythonServiceConfig struct {
 	BaseURL string `json:"base_url"`
 }
@@ -20,6 +27,7 @@ type LoggingConfig struct {
 
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
+	WebSocket     WebSocketConfig     `json:"websocket"`
 	PythonService PythonServiceConfig `json:"python_service"`
 	Logging       LoggingConfig       `json:"logging"`
 }

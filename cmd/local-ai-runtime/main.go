@@ -32,7 +32,7 @@ func main() {
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
 	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
-	wsHub := api.NewWebSocketHub(pythonClient, state.New(nil), cfg.Runtime.RequestTimeoutMs)
+	wsHub := api.NewWebSocketHub(pythonClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
