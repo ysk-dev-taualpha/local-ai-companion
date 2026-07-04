@@ -9,12 +9,12 @@ using UnityEngine;
 namespace AICompanion
 {
     /// <summary>
-    /// Go Runtime (192.168.12.112:8080) の /ws エンドポイントに接続する
+    /// WebSocket Runtime (192.168.12.112:8090) の /ws エンドポイントに接続する
     /// WebSocket クライアント。自動再接続機能付き。
     /// </summary>
     public class WebSocketClient : IDisposable
     {
-        private const string DefaultUrl = "ws://192.168.12.112:8080/ws";
+        private const string DefaultUrl = "ws://192.168.12.112:8090/ws";
         private const int ReceiveBufferSize = 4096;
         private const float ReconnectDelaySeconds = 3f;
 
