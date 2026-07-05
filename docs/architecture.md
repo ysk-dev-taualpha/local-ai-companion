@@ -140,3 +140,63 @@ Unity Character
 - Go Runtime が VOICEVOX を直接呼び出し（`internal/tts/` パッケージ）
 - `config.json` の `tts` セクションで有効化・話者設定
 - TTS 失敗時はログ出力のみで AI 応答テキストは通常通り返す
+
+## v0.5: Voice Input
+
+v0.5 では音声入力（Voice Input）を導入。Unity でキャプチャしたマイク音声を WebSocket 経由で Go Runtime にストリーミングし、Python AI Service で VAD（Voice Activity Detection）判定と STT（Speech-to-Text）変換を行う。認識テキストは既存の会話フローに統合される。
+
+### v0.5 Data Flow
+
+```text
+Unity (WinPC)
+  ↓ WebSocket binary: audio_chunk (100ms PCM)
+Go Runtime (X1C6)
+  ↓ HTTP: POST /vad/chunk (PCM streaming)
+Python AI Service (X1C6)
+  ↓ Silero VAD → speech_start / speech_end 検出
+  ↓ speech_end 時: WAV → HTTP POST /v1/transcribe
+WinPC faster-whisper (CUDA)
+  ↓ text
+Python AI Service
+  ↓ 既存会話フロー (LLM → TTS)
+Go Runtime
+  ↓ WebSocket: ai_response (audio + text)
+Unity
+```
+
+### Component Responsibilities
+
+#### Unity
+- マイクキャプチャ（100ms PCM チャンク）
+- WebSocket binary frame として `audio_chunk` を送信
+- VAD イベント受信（speech_start / speech_end）
+- 認識テキストの表示
+- キャンセル UI（音声入力中断）
+
+#### Go Runtime
+- WebSocket binary frame の受信・中継
+- Python AI Service への PCM チャンクリレー (`POST /vad/chunk`)
+- VAD イベント（speech_start / speech_end）の配信
+- STT 結果の会話フロー統合
+- WebSocket 経由の `ai_response` 返送
+
+#### Python AI Service
+- Silero VAD による発話区間検出
+- speech_start / speech_end イベントの発火
+- speech_end 検出時に蓄積 WAV を faster-whisper へ送信
+- STT 結果を既存会話ロジックに連携
+
+#### WinPC faster-whisper (STT Engine)
+- モデル: faster-whisper small
+- 実行環境: CUDA（RTX 2080S）
+- HTTP API: `/v1/transcribe`（WAV → text）
+
+### GPU Memory (RTX 2080S 8GB)
+
+| プロセス | 使用量 |
+|---------|--------|
+| Ollama g4v100 | ~6.0GB |
+| faster-whisper small | ~1.5GB |
+| **合計** | **~7.5GB** |
+
+faster-whisper small モデルは ~1.5GB の VRAM を使用し、Ollama g4v100（~6.0GB）と共存可能。合計 ~7.5GB で 8GB VRAM の上限内に収まる。
