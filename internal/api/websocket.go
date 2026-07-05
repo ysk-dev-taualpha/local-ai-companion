@@ -3,9 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -123,89 +121,33 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		switch msgType {
-		case websocket.BinaryMessage:
-			h.handleAudioChunk(conn, msgBytes)
-		case websocket.TextMessage:
-			var msg WSMessage
-			if err := json.Unmarshal(msgBytes, &msg); err != nil {
-				continue
+		// Binary frame → audio chunk
+		if msgType == websocket.BinaryMessage {
+			h.handleAudioChunk(msgBytes)
+			continue
+		}
+
+		var msg WSMessage
+		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			continue
+		}
+
+		switch msg.Type {
+		case "text":
+			if h.agentLoop != nil {
+				h.handleTextMessageAgent(conn, msg)
+			} else {
+				h.handleTextMessage(conn, msg)
 			}
-			h.routeTextMessage(conn, msg)
+		default:
+			h.handleEcho(conn, msg)
 		}
 	}
-}
-
-func (h *WebSocketHub) routeTextMessage(conn *websocket.Conn, msg WSMessage) {
-	switch msg.Type {
-	case "text":
-		if h.agentLoop != nil {
-			h.handleTextMessageAgent(conn, msg)
-		} else {
-			h.handleTextMessage(conn, msg)
-		}
-	default:
-		h.handleEcho(conn, msg)
-	}
-}
-
-// AudioChunk is a voice binary frame received from Unity.
-// Binary frame format (Big Endian):
-//
-//	[4B reqIDlen][NB reqID UTF-8][4B sequence number][2B sample rate][NB PCM int16 LE]
-type AudioChunk struct {
-	RequestID  string
-	Sequence   uint32
-	SampleRate uint16
-	PCMData    []byte
-}
-
-func parseAudioChunk(data []byte) (*AudioChunk, error) {
-	if len(data) < 4 {
-		return nil, fmt.Errorf("audio_chunk: frame too short, need at least 4 bytes for reqIDlen, got %d", len(data))
-	}
-	reqIDLen := binary.BigEndian.Uint32(data[0:4])
-	if reqIDLen > 256 {
-		return nil, fmt.Errorf("audio_chunk: reqIDlen too large: %d (max 256)", reqIDLen)
-	}
-	headerSize := int(4 + reqIDLen + 4 + 2)
-	if len(data) < headerSize {
-		return nil, fmt.Errorf("audio_chunk: frame too short for header, need %d bytes, got %d", headerSize, len(data))
-	}
-	offset := 4
-	reqID := string(data[offset : offset+int(reqIDLen)])
-	offset += int(reqIDLen)
-	seq := binary.BigEndian.Uint32(data[offset : offset+4])
-	offset += 4
-	sampleRate := binary.BigEndian.Uint16(data[offset : offset+2])
-	offset += 2
-	pcmData := data[offset:]
-	return &AudioChunk{RequestID: reqID, Sequence: seq, SampleRate: sampleRate, PCMData: pcmData}, nil
-}
-
-func (h *WebSocketHub) handleAudioChunk(conn *websocket.Conn, rawData []byte) {
-	if h.stateMachine.IsSpeaking() {
-		log.Printf("websocket: audio_chunk discarded during SPEAKING (%d bytes)", len(rawData))
-		return
-	}
-	chunk, err := parseAudioChunk(rawData)
-	if err != nil {
-		log.Printf("websocket: failed to parse audio_chunk: %v", err)
-		return
-	}
-	// TODO(v0.5): integrate STT pipeline here
-	log.Printf("websocket: received audio_chunk reqID=%s seq=%d rate=%dHz size=%d bytes",
-		chunk.RequestID, chunk.Sequence, chunk.SampleRate, len(chunk.PCMData))
 }
 
 func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessage) {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
-
-	if h.stateMachine.IsSpeaking() {
-		h.sendError(conn, msg.RequestID, "busy: currently speaking (TTS feedback loop prevention)")
-		return
-	}
 
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
@@ -273,11 +215,6 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
-
-	if h.stateMachine.IsSpeaking() {
-		h.sendError(conn, msg.RequestID, "busy: currently speaking (TTS feedback loop prevention)")
-		return
-	}
 
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
