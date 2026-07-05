@@ -1,18 +1,18 @@
-# Unity v0.3 — テキスト接続クライアント
+# Unity v0.3/v0.4 Text and Audio Client
 
-AI Companion の Unity 側テキストチャットクライアントです。
-Runtime（X1C6, 192.168.12.112:8090）と WebSocket で通信します。
-WebSocket に接続できない場合は HTTP API へフォールバックします。
+AI Companion の Unity クライアントです。Go Runtime（X1C6, `192.168.12.112:8090`）と WebSocket で通信し、テキスト応答と v0.4 の音声メッセージを扱います。WebSocket に接続できない場合は HTTP API へフォールバックします。
 
 ## 動作環境
 
-- **Unity**: 2022 LTS 推奨（.NET Standard 2.1）
-- **PC**: WinPC (192.168.12.107, RTX2080S)
-- **依存**: 外部パッケージ不要（`System.Net.WebSockets` 標準利用）
+- Unity: 2022 LTS
+- PC: WinPC (`192.168.12.107`, RTX2080S)
+- 依存: 外部パッケージ不要
+- WebSocket: `ws://192.168.12.112:8090/ws`
+- HTTP fallback: `http://192.168.12.112:8090/v1/conversation`
 
-## プロジェクト構成
+## 構成
 
-```
+```text
 unity/v0.3-text-connection/
 ├── README.md
 ├── Packages/
@@ -20,39 +20,13 @@ unity/v0.3-text-connection/
 └── Assets/
     ├── Scenes/
     └── Scripts/
-        ├── WebSocketClient.cs   # WebSocket クライアント（自動再接続付き）
-        └── UIManager.cs         # UI 自動生成 + UI 制御 + メインディスパッチャ
+        ├── WebSocketClient.cs
+        └── UIManager.cs
 ```
 
-## セットアップ手順
+`UIManager` は Play 時に UI と `AudioSource` を自動生成します。既存のシーンに手動で Canvas や EventSystem を置く必要はありません。
 
-### 1. Unity プロジェクトを開く
-
-Unity Hub で `unity/v0.3-text-connection/` をプロジェクトとして開いてください。
-`Packages/`、`ProjectSettings/`、シーンファイルは同梱済みです。
-
-### 2. シーン構築
-
-`UIManager` はシーン起動時に自動生成されます。
-Canvas、TitleText、StatusText、ScrollView、InputField、SendButton、EventSystem は手動配置不要です。
-
-既存 Canvas の描画順に影響されないよう、専用 Canvas を前面に生成します。
-
-### 3. 接続先
-
-デフォルト接続先:
-
-- WebSocket: `ws://192.168.12.112:8090/ws`
-- HTTP fallback: `http://192.168.12.112:8090/v1/conversation`
-
-別環境で動かす場合は `UIManager` の `_wsUrl` と `_httpFallbackUrl` を変更してください。
-
-### 4. UnityMainThreadDispatcher
-
-`UIManager.cs` に `UnityMainThreadDispatcher` が同梱されています。
-シーン起動時に自動生成されるため、手動配置は不要です。
-
-## WebSocket プロトコル
+## WebSocket
 
 ### 送信
 
@@ -66,19 +40,21 @@ Canvas、TitleText、StatusText、ScrollView、InputField、SendButton、EventSy
 
 ### 受信
 
-**状態遷移通知:**
+状態遷移:
+
 ```json
-{"type": "state_change", "state": "LISTENING"}
+{"type": "state_change", "state": "SPEAKING"}
 ```
 
-**AI 応答:**
+AI応答:
+
 ```json
 {
   "type": "ai_response",
   "request_id": "550e8400-...",
   "conversation_id": "default",
   "assistant": {
-    "text": "こんにちは、何かお手伝いしましょうか？",
+    "text": "こんにちは",
     "emotion": "happy",
     "motion": "wave",
     "speak_style": "normal",
@@ -87,21 +63,55 @@ Canvas、TitleText、StatusText、ScrollView、InputField、SendButton、EventSy
 }
 ```
 
-**エラー:**
+音声:
+
+```json
+{
+  "type": "audio",
+  "request_id": "550e8400-...",
+  "data": "<base64-wav>"
+}
+```
+
+`data`, `audio`, `audio_base64` のいずれかに Base64 エンコードされた WAV を入れると再生します。PCM 8/16/24/32bit と IEEE float 32bit WAV をサポートします。
+
+音声制御:
+
+```json
+{"type": "audio_control", "action": "stop"}
+```
+
+```json
+{"type": "audio_control", "action": "clear_queue"}
+```
+
+エラー:
+
 ```json
 {"type": "error", "request_id": "...", "error": "python service error"}
 ```
 
-## 動作確認
+## 音声再生
 
-1. Runtime が X1C6:8090 で起動していることを確認
-2. Unity で Play ボタンを押す
-3. ステータスが「接続済み」になることを確認
-4. テキストを入力して送信 → チャット履歴に `You:` と `AI:` が表示されることを確認
+- `audio` メッセージを Base64 decode して `AudioClip` に変換します。
+- `AudioSource` は `UIManager` が自動で追加します。
+- 複数の `audio` メッセージはキューに入り、順番に再生されます。
+- `state_change: SPEAKING` で再生キューを開始します。
+- `state_change: IDLE` で現在の再生とキューを停止します。
+- `audio_control: stop` で現在の再生を停止し、待機中キューも破棄します。
+- `audio_control: clear_queue` で現在の再生は続けたまま、待機中キューだけ破棄します。
+
+## 確認手順
+
+1. Runtime が `192.168.12.112:8090` で起動していることを確認します。
+2. Unity Hub で `unity/v0.3-text-connection/` を開きます。
+3. Play します。
+4. ステータスが接続済みになることを確認します。
+5. テキストを送信し、`You:` と `AI:` が表示されることを確認します。
+6. v0.4 TTS 実装が有効な場合、`audio` メッセージ受信後に音声が再生されることを確認します。
 
 ## 備考
 
-- 切断時は 3 秒後に自動再接続します
-- 送信中はボタンと入力欄が無効化されます
-- 応答ログは最大 200 行まで保持されます
-- Unity 2022 の組み込みフォント変更に対応するため `LegacyRuntime.ttf` を使用します
+- 切断時は 3 秒後に自動再接続します。
+- 応答ログは最大 200 行です。
+- Unity 2022 の組み込みフォント変更に合わせて `LegacyRuntime.ttf` を使用します。
