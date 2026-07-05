@@ -82,12 +82,15 @@ func TestVoiceInputConcurrentAudioChunks(t *testing.T) {
 	}
 	defer conn.Close()
 	var wg sync.WaitGroup
+	var writeMu sync.Mutex
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 5; i++ {
 			frame := buildAudioChunkFrame("req", uint32(i), 16000, []int16{100, 200, 300})
+			writeMu.Lock()
 			conn.WriteMessage(websocket.BinaryMessage, frame)
+			writeMu.Unlock()
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
@@ -97,7 +100,9 @@ func TestVoiceInputConcurrentAudioChunks(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		msg := WSMessage{Type: "text", Payload: "こんにちは", RequestID: "conc-req"}
 		msgBytes, _ := json.Marshal(msg)
+		writeMu.Lock()
 		conn.WriteMessage(websocket.TextMessage, msgBytes)
+		writeMu.Unlock()
 	}()
 	msgs := readAllMessages(t, conn, 10*time.Second)
 	wg.Wait()
