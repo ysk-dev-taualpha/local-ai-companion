@@ -124,6 +124,7 @@ namespace AICompanion
         {
             EnsureUIReferences();
 
+            // タイトル
             if (_titleText != null)
                 _titleText.text = "AI Companion v0.3";
 
@@ -134,6 +135,7 @@ namespace AICompanion
             }
             else
             {
+                // WebSocket クライアント初期化
                 _wsClient = new WebSocketClient(_wsUrl);
                 _wsClient.OnConnected += HandleConnected;
                 _wsClient.OnDisconnected += HandleDisconnected;
@@ -141,14 +143,17 @@ namespace AICompanion
                 _wsClient.OnError += HandleError;
             }
 
+            // 送信ボタン
             if (_sendButton != null)
                 _sendButton.onClick.AddListener(OnSendClicked);
 
+            // Enter キーでも送信
             if (_inputField != null)
                 _inputField.onEndEdit.AddListener(OnInputEndEdit);
 
             if (_wsClient != null)
             {
+                // 自動接続
                 _ = _wsClient.ConnectAsync();
                 UpdateStatus("接続中...");
             }
@@ -161,11 +166,17 @@ namespace AICompanion
             StopAudioPlayback();
         }
 
+        /// <summary>
+        /// 送信ボタン押下時の処理。
+        /// </summary>
         public void OnSendClicked()
         {
             SendMessage();
         }
 
+        /// <summary>
+        /// InputField で Enter キーが押された時の処理。
+        /// </summary>
         private void OnInputEndEdit(string text)
         {
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
@@ -181,7 +192,10 @@ namespace AICompanion
             var text = _inputField.text.Trim();
             if (string.IsNullOrEmpty(text)) return;
 
+            // 送信中は無効化
             SetSendingState(true);
+
+            // ユーザー入力を表示
             AppendResponse($"<color=#888888>You:</color> {text}");
 
             var requestId = Guid.NewGuid().ToString();
@@ -201,6 +215,7 @@ namespace AICompanion
                 await _wsClient.SendAsync(json);
             }
 
+            // 入力フィールドをクリア
             _inputField.text = "";
             _inputField.ActivateInputField();
         }
@@ -261,6 +276,7 @@ namespace AICompanion
             }
             catch
             {
+                // Fall through to raw display.
             }
 
             AppendResponse($"<color=#aaaaaa>{json}</color>");
@@ -572,10 +588,15 @@ namespace AICompanion
             return null;
         }
 
+        /// <summary>
+        /// 応答表示エリアにテキストを追記する。
+        /// 古い行は自動的に削除される。
+        /// </summary>
         private void AppendResponse(string line)
         {
             _responseLines.Add(line);
 
+            // 行数制限
             while (_responseLines.Count > _maxResponseLines)
                 _responseLines.RemoveAt(0);
 
@@ -584,6 +605,7 @@ namespace AICompanion
                 _responseText.text = string.Join("\n", _responseLines);
             }
 
+            // 自動スクロール
             if (_scrollRect != null)
             {
                 Canvas.ForceUpdateCanvases();
