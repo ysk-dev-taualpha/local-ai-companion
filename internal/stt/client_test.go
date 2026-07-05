@@ -74,8 +74,9 @@ func TestFasterWhisperClient_Transcribe_Timeout(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}))
 	defer srv.Close()
-	client := NewFasterWhisper(srv.URL+"/v1/transcribe", 100*time.Millisecond)
-	ctx := context.Background()
+	client := NewFasterWhisper(srv.URL+"/v1/transcribe", 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	pcmData := make([]byte, 1600)
 	result, err := client.Transcribe(ctx, pcmData, 16000, "ja")
 	if err != nil {
