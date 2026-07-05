@@ -5,67 +5,59 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
+
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 )
 
-// OllamaClient communicates with an Ollama server for LLM inference with tool support.
 type OllamaClient struct {
 	baseURL    string
 	model      string
 	httpClient *http.Client
 }
 
-// NewOllamaClient creates a new OllamaClient.
 func NewOllamaClient(baseURL, model string, timeout time.Duration) *OllamaClient {
 	return &OllamaClient{
-		baseURL: baseURL,
-		model:   model,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		baseURL:    baseURL,
+		model:      model,
+		httpClient: &http.Client{Timeout: timeout},
 	}
 }
 
-// ChatMessage represents a message in an Ollama chat conversation.
-type ChatMessage struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string    `json:"tool_call_id,omitempty"`
-}
-
-// ToolCall represents a tool call from the LLM (Ollama format).
-type ToolCall struct {
-	ID       string              `json:"-"`
-	Function ToolCallFunction    `json:"function"`
-}
-
-// ToolCallFunction holds the function name and arguments.
-type ToolCallFunction struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage  `json:"arguments"`
-}
-
-// chatRequest is the Ollama /api/chat request body.
 type chatRequest struct {
-	Model    string         `json:"model"`
-	Messages []ChatMessage  `json:"messages"`
-	Tools    []map[string]any `json:"tools,omitempty"`
-	Stream   bool           `json:"stream"`
+	Model    string            `json:"model"`
+	Messages []chatMessage     `json:"messages"`
+	Tools    []tool.Definition `json:"tools,omitempty"`
+	Stream   bool              `json:"stream"`
 }
 
-// chatResponse is the Ollama /api/chat response body.
+type chatMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type toolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function toolCallFunc `json:"function"`
+}
+
+type toolCallFunc struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
 type chatResponse struct {
-	Message struct {
-		Role      string     `json:"role"`
-		Content   string     `json:"content"`
-		ToolCalls []ToolCall `json:"tool_calls"`
-	} `json:"message"`
+	Model   string      `json:"model"`
+	Message chatMessage `json:"message"`
+	Done    bool        `json:"done"`
 }
 
-// Chat sends a chat request to Ollama with optional tool schemas and returns the response.
-func (c *OllamaClient) Chat(ctx context.Context, messages []ChatMessage, tools []map[string]any) (*ChatMessage, error) {
+func (c *OllamaClient) Chat(ctx context.Context, messages []chatMessage, tools []tool.Definition) (*chatMessage, error) {
 	reqBody := chatRequest{
 		Model:    c.model,
 		Messages: messages,
@@ -73,14 +65,15 @@ func (c *OllamaClient) Chat(ctx context.Context, messages []ChatMessage, tools [
 		Stream:   false,
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("ollama: failed to marshal request: %w", err)
+		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(bodyBytes))
+	endpoint := c.baseURL + "/api/chat"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("ollama: failed to create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -90,18 +83,65 @@ func (c *OllamaClient) Chat(ctx context.Context, messages []ChatMessage, tools [
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama: unexpected status %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return nil, fmt.Errorf("ollama: failed to decode response: %w", err)
+		return nil, fmt.Errorf("ollama: parse response: %w", err)
 	}
 
-	return &ChatMessage{
-		Role:      chatResp.Message.Role,
-		Content:   chatResp.Message.Content,
-		ToolCalls: chatResp.Message.ToolCalls,
-	}, nil
+	return &chatResp.Message, nil
+}
+
+type Message struct {
+	Role       string
+	Content    string
+	ToolCalls  []tool.Call
+	ToolCallID string
+}
+
+func messageToChat(m Message) chatMessage {
+	cm := chatMessage{
+		Role:    m.Role,
+		Content: m.Content,
+	}
+	if len(m.ToolCalls) > 0 {
+		cm.ToolCalls = make([]toolCall, len(m.ToolCalls))
+		for i, tc := range m.ToolCalls {
+			cm.ToolCalls[i] = toolCall{
+				ID:   tc.ID,
+				Type: "function",
+				Function: toolCallFunc{
+					Name:      tc.Name,
+					Arguments: tc.Args,
+				},
+			}
+		}
+	}
+	if m.ToolCallID != "" {
+		cm.ToolCallID = m.ToolCallID
+	}
+	return cm
+}
+
+func chatToMessage(cm chatMessage) Message {
+	m := Message{
+		Role:       cm.Role,
+		Content:    cm.Content,
+		ToolCallID: cm.ToolCallID,
+	}
+	if len(cm.ToolCalls) > 0 {
+		m.ToolCalls = make([]tool.Call, len(cm.ToolCalls))
+		for i, tc := range cm.ToolCalls {
+			m.ToolCalls[i] = tool.Call{
+				ID:   tc.ID,
+				Name: tc.Function.Name,
+				Args: tc.Function.Arguments,
+			}
+		}
+	}
+	return m
 }

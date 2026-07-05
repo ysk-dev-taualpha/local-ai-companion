@@ -10,12 +10,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/agent"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/api"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/audit"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/config"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/pythonservice"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool/tools"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
 
@@ -58,7 +62,15 @@ func main() {
 		logger.Info("TTS enabled: VOICEVOX at %s, speaker=%d", cfg.TTS.VoicevoxURL, cfg.TTS.SpeakerID)
 	}
 
-	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins)
+	// Agent tool calling setup
+	var agentLoop *agent.Loop
+	if cfg.Ollama.Enabled && cfg.Agent.Enabled {
+		agentLoop = setupAgent(cfg)
+		logger.Info("Agent loop enabled: model=%s, max_loops=%d, tools=%v",
+			cfg.Ollama.Model, cfg.Agent.MaxToolLoops, cfg.Agent.AllowedTools)
+	}
+
+	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
@@ -85,4 +97,86 @@ func main() {
 		logger.Error("server error: %v", err)
 		os.Exit(1)
 	}
+}
+
+func setupAgent(cfg *config.Config) *agent.Loop {
+	registry := tool.NewRegistry()
+
+	webSearch := tools.NewWebSearch(cfg.Ollama.BaseURL)
+	webFetch := tools.NewWebFetch()
+	audioControl := tools.NewAudioControl(nil)
+	setState := tools.NewSetState(nil)
+
+	registry.Register(tool.Definition{
+		Name:        "web_search",
+		Description: "Search the web for information. Use this to find current information, facts, or answers to questions.",
+		Parameters: tool.Parameters{
+			Type: "object",
+			Properties: map[string]tool.Property{
+				"query":       {Type: "string", Description: "The search query"},
+				"max_results": {Type: "integer", Description: "Maximum number of results to return (default: 3)"},
+			},
+			Required: []string{"query"},
+		},
+	}, webSearch)
+
+	registry.Register(tool.Definition{
+		Name:        "web_fetch",
+		Description: "Fetch and read the content of a web page by URL. Returns the text content.",
+		Parameters: tool.Parameters{
+			Type: "object",
+			Properties: map[string]tool.Property{
+				"url": {Type: "string", Description: "The URL to fetch"},
+			},
+			Required: []string{"url"},
+		},
+	}, webFetch)
+
+	registry.Register(tool.Definition{
+		Name:        "audio_control",
+		Description: "Control audio playback. Actions: mute, unmute, volume_up, volume_down, pause, resume.",
+		Parameters: tool.Parameters{
+			Type: "object",
+			Properties: map[string]tool.Property{
+				"action": {
+					Type:        "string",
+					Description: "The audio action to perform",
+					Enum:        []string{"mute", "unmute", "volume_up", "volume_down", "pause", "resume"},
+				},
+			},
+			Required: []string{"action"},
+		},
+	}, audioControl)
+
+	registry.Register(tool.Definition{
+		Name:        "set_state",
+		Description: "Change the AI companion's state. Valid states: idle, listening, thinking, speaking, sleeping.",
+		Parameters: tool.Parameters{
+			Type: "object",
+			Properties: map[string]tool.Property{
+				"state": {
+					Type:        "string",
+					Description: "The target state",
+					Enum:        []string{"idle", "listening", "thinking", "speaking", "sleeping"},
+				},
+			},
+			Required: []string{"state"},
+		},
+	}, setState)
+
+	policy := tool.NewPolicy()
+	for _, name := range cfg.Agent.AllowedTools {
+		policy.Allow(name)
+	}
+
+	executor := tool.NewExecutor(registry, policy)
+	auditLogger := audit.NewLogger()
+
+	return agent.NewLoop(registry, executor, auditLogger, agent.Config{
+		MaxToolLoops:  cfg.Agent.MaxToolLoops,
+		OllamaBaseURL: cfg.Ollama.BaseURL,
+		Model:         cfg.Ollama.Model,
+		OllamaTimeout: time.Duration(cfg.Ollama.TimeoutMs) * time.Millisecond,
+		SystemPrompt:  cfg.Agent.SystemPrompt,
+	})
 }
