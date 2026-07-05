@@ -7,6 +7,10 @@ name = "local-ai-companion"
 version = "0.1.0"
 description = "Local AI companion conversation core."
 requires-python = ">=3.7"
+dependencies = [
+    "numpy>=1.21",
+    "onnxruntime>=1.14",
+]
 
 [project.scripts]
 local-ai-companion = "local_ai_companion.cli:main"
