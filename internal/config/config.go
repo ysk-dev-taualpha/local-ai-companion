@@ -34,12 +34,24 @@ type TTSConfig struct {
 	SpeakerID   int    `json:"speaker_id"`
 }
 
+// AgentConfig はエージェントツール呼び出しの設定です。
+type AgentConfig struct {
+	Enabled      bool     `json:"enabled"`
+	OllamaURL    string   `json:"ollama_url"`
+	OllamaModel  string   `json:"ollama_model"`
+	MaxIter      int      `json:"max_iter"`
+	SystemPrompt string   `json:"system_prompt"`
+	AllowedTools []string `json:"allowed_tools"`
+	AuditSize    int      `json:"audit_size"`
+}
+
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
 	WebSocket     WebSocketConfig     `json:"websocket"`
 	PythonService PythonServiceConfig `json:"python_service"`
 	Logging       LoggingConfig       `json:"logging"`
 	TTS           TTSConfig           `json:"tts"`
+	Agent         AgentConfig         `json:"agent"`
 }
 
 func Load(path string) (*Config, error) {
@@ -60,6 +72,14 @@ func Load(path string) (*Config, error) {
 			Enabled:     false,
 			VoicevoxURL: "http://127.0.0.1:50021",
 			SpeakerID:   3,
+		},
+		Agent: AgentConfig{
+			Enabled:     false,
+			OllamaURL:   "http://192.168.12.107:11434",
+			OllamaModel: "g4v100",
+			MaxIter:     5,
+			AllowedTools: []string{},
+			AuditSize:   1000,
 		},
 	}
 
