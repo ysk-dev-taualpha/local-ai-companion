@@ -1,6 +1,8 @@
 import json
 from dataclasses import dataclass, field
 
+from local_ai_companion.stt import STTConfig
+
 
 @dataclass(frozen=True)
 class ConversationConfig:
@@ -37,6 +39,7 @@ class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
 
 
 def load_config(path=None):
@@ -50,6 +53,7 @@ def load_config(path=None):
     llm = raw.get("llm", {})
     prompt_raw = raw.get("prompt", {})
     logging_raw = raw.get("logging", {})
+    stt_raw = raw.get("stt", {})
 
     return AppConfig(
         conversation=ConversationConfig(
@@ -72,6 +76,12 @@ def load_config(path=None):
             log_dir=logging_raw.get("log_dir", ""),
             include_user_text=logging_raw.get("include_user_text", False),
             include_raw_response=logging_raw.get("include_raw_response", False),
+        ),
+        stt=STTConfig(
+            server_url=stt_raw.get("server_url", "http://192.168.12.107:8093/v1/transcribe"),
+            timeout_seconds=float(stt_raw.get("timeout_seconds", 5.0)),
+            language=stt_raw.get("language", "ja"),
+            sample_rate=int(stt_raw.get("sample_rate", 16000)),
         ),
     )
 
