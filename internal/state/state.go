@@ -36,9 +36,8 @@ func (s State) String() string {
 type StateChangeCallback func(from, to State)
 
 // StateMachine manages conversation state with validated transitions.
-// All methods are safe for concurrent use.
 type StateMachine struct {
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	current     State
 	onChange    StateChangeCallback
 	transitions map[State]map[State]bool
@@ -48,8 +47,8 @@ type StateMachine struct {
 // If callback is non-nil, it is invoked on every valid state transition.
 func New(callback StateChangeCallback) *StateMachine {
 	sm := &StateMachine{
-		current:   IDLE,
-		onChange:  callback,
+		current:  IDLE,
+		onChange: callback,
 		transitions: map[State]map[State]bool{
 			IDLE:      {LISTENING: true},
 			LISTENING: {THINKING: true, IDLE: true},
@@ -62,8 +61,8 @@ func New(callback StateChangeCallback) *StateMachine {
 
 // Current returns the current state.
 func (sm *StateMachine) Current() State {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	return sm.current
 }
 
@@ -71,17 +70,22 @@ func (sm *StateMachine) Current() State {
 // Returns an error if the transition is not allowed.
 func (sm *StateMachine) Transition(to State) error {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	if sm.current == to {
+		sm.mu.Unlock()
 		return nil
 	}
 	if !sm.transitions[sm.current][to] {
-		return fmt.Errorf("invalid transition: %s → %s", sm.current, to)
+		from := sm.current
+		sm.mu.Unlock()
+		return fmt.Errorf("invalid transition: %s → %s", from, to)
 	}
 	from := sm.current
 	sm.current = to
-	if sm.onChange != nil {
-		sm.onChange(from, to)
+	onChange := sm.onChange
+	sm.mu.Unlock()
+
+	if onChange != nil {
+		onChange(from, to)
 	}
 	return nil
 }
@@ -90,12 +94,16 @@ func (sm *StateMachine) Transition(to State) error {
 // The callback is invoked if the state actually changes.
 func (sm *StateMachine) Reset() {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	if sm.current != IDLE {
 		from := sm.current
 		sm.current = IDLE
-		if sm.onChange != nil {
-			sm.onChange(from, IDLE)
+		onChange := sm.onChange
+		sm.mu.Unlock()
+
+		if onChange != nil {
+			onChange(from, IDLE)
 		}
+		return
 	}
+	sm.mu.Unlock()
 }
