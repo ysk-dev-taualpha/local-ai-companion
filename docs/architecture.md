@@ -18,6 +18,8 @@ Primary responsibilities:
 
 UnityはAI処理を直接持たない。Go Runtimeから受け取ったイベントを表示・再生する。
 
+Unity 側の詳細設計は [unity_design.md](unity_design.md) を参照する。
+
 ### Go Runtime
 
 Go Runtimeは常駐プロセス、通信、並行処理、キャンセル制御を担当する。
