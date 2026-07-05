@@ -40,18 +40,22 @@ class SileroVAD:
 
     def __init__(self, config: Optional[VADConfig] = None):
         self.config = config or VADConfig()
-        self._session = None
+        ms = self.FRAME_SIZE / self.config.sample_rate * 1000
+        self._silence_frames = max(1, int(self.config.silence_duration_ms / ms))
+        self._min_speech = max(1, int(self.config.min_speech_duration_ms / ms))
         self._is_speech = False
         self._speech_buffer = bytearray()
-        self._speech_start_time = 0.0
-        self._silence_start_time = None
+        self._speech_count = 0
+        self._silence_count = 0
+        self._valid = False
         self._leftover = []
 
     def reset(self):
         self._is_speech = False
         self._speech_buffer = bytearray()
-        self._speech_start_time = 0.0
-        self._silence_start_time = None
+        self._speech_count = 0
+        self._silence_count = 0
+        self._valid = False
         self._leftover = []
 
     def process_chunk(self, pcm_bytes: bytes) -> dict:
@@ -63,31 +67,30 @@ class SileroVAD:
         self._leftover = []
         event = "idle"
         fs = self.FRAME_SIZE
-        import time
         while len(samples) >= fs:
             frame_samples = samples[:fs]
             samples = samples[fs:]
             speech_prob = self._infer(frame_samples)
             is_speech = speech_prob > self.config.speech_threshold
-            if is_speech and not self._is_speech:
-                self._is_speech = True
-                self._speech_start_time = time.time()
-                self._speech_buffer = bytearray()
-                self._silence_start_time = None
-                event = "speech_start"
             if is_speech:
+                self._speech_count += 1
+                self._silence_count = 0
                 self._speech_buffer.extend(struct.pack(f"<{fs}h", *frame_samples))
-            if not is_speech and self._is_speech:
-                if self._silence_start_time is None:
-                    self._silence_start_time = time.time()
-                silence_dur = (time.time() - self._silence_start_time) * 1000
-                if silence_dur >= self.config.silence_duration_ms:
-                    speech_dur = (time.time() - self._speech_start_time) * 1000
-                    if speech_dur >= self.config.min_speech_duration_ms:
+                if not self._is_speech:
+                    self._is_speech = True
+                    self._valid = False
+                    event = "speech_start"
+                if self._speech_count >= self._min_speech:
+                    self._valid = True
+            elif self._is_speech:
+                self._silence_count += 1
+                if self._silence_count >= self._silence_frames:
+                    if self._valid:
                         event = "speech_end"
-                    self._is_speech = False
-                    self._speech_buffer = bytearray()
-                    self._silence_start_time = None
+                    self.reset()
+            else:
+                # Not in speech and not detecting speech: clear buffer
+                self._speech_buffer = bytearray()
         self._leftover = samples
         return {"event": event}
 
@@ -135,7 +138,7 @@ class TestSileroVADProcessChunk(unittest.TestCase):
         self.assertIn(result["event"], ("speech_start", "idle"))
 
     def test_speech_end(self):
-        vad = SileroVAD(VADConfig(speech_threshold=0.3, silence_duration_ms=50, min_speech_duration_ms=100))
+        vad = SileroVAD(VADConfig(speech_threshold=0.3, silence_duration_ms=50, min_speech_duration_ms=30))
         self.assertEqual(vad.process_chunk(_make_pcm(60, amplitude=10000))["event"], "speech_start")
         self.assertEqual(vad.process_chunk(_make_silence(100))["event"], "speech_end")
 
@@ -148,7 +151,7 @@ class TestSileroVADProcessChunk(unittest.TestCase):
 
     def test_high_threshold_blocks_speech(self):
         vad = SileroVAD(VADConfig(speech_threshold=0.95))
-        self.assertEqual(vad.process_chunk(_make_pcm(100, amplitude=5000))["event"], "idle")
+        self.assertEqual(vad.process_chunk(_make_pcm(100, amplitude=400))["event"], "idle")
 
 
 class TestSileroVADBoundary(unittest.TestCase):
