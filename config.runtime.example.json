@@ -7,7 +7,10 @@
     "allowed_origins": []
   },
   "python_service": {
-    "base_url": "http://127.0.0.1:8090"
+    "base_url": "http://127.0.0.1:8090",
+    "command": "",
+    "ready_timeout_ms": 10000,
+    "shutdown_timeout_ms": 5000
   },
   "logging": {
     "level": "info"
