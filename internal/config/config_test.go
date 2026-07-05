@@ -28,6 +28,19 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsTTS(t *testing.T) {
+	cfg, _ := Load("")
+	if cfg.TTS.Enabled {
+		t.Error("expected TTS disabled by default")
+	}
+	if cfg.TTS.VoicevoxURL != "http://127.0.0.1:50021" {
+		t.Errorf("expected default voicevox_url 'http://127.0.0.1:50021', got %s", cfg.TTS.VoicevoxURL)
+	}
+	if cfg.TTS.SpeakerID != 3 {
+		t.Errorf("expected default speaker_id 3, got %d", cfg.TTS.SpeakerID)
+	}
+}
+
 func TestLoadFromFile(t *testing.T) {
 	data := `{
 		"runtime":{"listen_addr":"0.0.0.0:9090","request_timeout_ms":5000},

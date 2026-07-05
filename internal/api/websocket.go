@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
 
 // buildCheckOrigin は許可された Origin リストから CheckOrigin 関数を生成します。
@@ -56,11 +58,12 @@ type WSMessage struct {
 
 // WSAIResponse は AI 応答を含む WebSocket レスポンスです。
 type WSAIResponse struct {
-	Type           string                  `json:"type"`
-	RequestID      string                  `json:"request_id"`
-	ConversationID string                  `json:"conversation_id,omitempty"`
+	Type           string                   `json:"type"`
+	RequestID      string                   `json:"request_id"`
+	ConversationID string                   `json:"conversation_id,omitempty"`
 	Assistant      *client.AssistantMessage `json:"assistant,omitempty"`
-	Error          string                  `json:"error,omitempty"`
+	Audio          string                   `json:"audio,omitempty"` // base64 エンコードされた WAV 音声データ
+	Error          string                   `json:"error,omitempty"`
 }
 
 // WSStateNotification は状態変化をブロードキャストするメッセージです。
@@ -76,11 +79,14 @@ type wsConnState struct {
 
 // WebSocketHub は複数の WebSocket 接続を goroutine-safe に管理し、
 // 受信したテキストを AI Service に転送して応答を返します。
+// オプションで TTS クライアントを設定すると、AI 応答テキストを音声合成し
+// WSAIResponse の Audio フィールドに base64 エンコードして返します。
 type WebSocketHub struct {
 	mu               sync.RWMutex
 	stateMu          sync.Mutex
 	conns            map[*websocket.Conn]*wsConnState
 	pythonClient     PythonClient
+	ttsClient        tts.TTSClient
 	stateMachine     *state.StateMachine
 	requestTimeoutMs int
 	upgrader         websocket.Upgrader
@@ -88,10 +94,12 @@ type WebSocketHub struct {
 
 // NewWebSocketHub は新しい WebSocketHub を生成します。
 // allowedOrigins が空の場合は localhost のみ許可します。
-func NewWebSocketHub(pythonClient PythonClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string) *WebSocketHub {
+// ttsClient は省略可能です（nil の場合は TTS 無効）。
+func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string) *WebSocketHub {
 	return &WebSocketHub{
 		conns:            make(map[*websocket.Conn]*wsConnState),
 		pythonClient:     pythonClient,
+		ttsClient:        ttsClient,
 		stateMachine:     stateMachine,
 		requestTimeoutMs: requestTimeoutMs,
 		upgrader: websocket.Upgrader{
@@ -193,6 +201,16 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		RequestID:      resp.RequestID,
 		ConversationID: resp.ConversationID,
 		Assistant:      &resp.Assistant,
+	}
+
+	// TTS 音声合成（オプション）
+	if h.ttsClient != nil && resp.Assistant.Text != "" {
+		audioData, ttsErr := h.ttsClient.Speak(resp.Assistant.Text)
+		if ttsErr != nil {
+			log.Printf("websocket: tts synthesis failed: %v", ttsErr)
+		} else {
+			aiResp.Audio = base64.StdEncoding.EncodeToString(audioData)
+		}
 	}
 	if err := h.writeJSON(conn, aiResp); err != nil {
 		log.Printf("websocket: failed to write ai_response: %v", err)

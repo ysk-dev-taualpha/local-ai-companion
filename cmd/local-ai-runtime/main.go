@@ -16,6 +16,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/pythonservice"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
 
 func main() {
@@ -50,7 +51,14 @@ func main() {
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
 	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
-	wsHub := api.NewWebSocketHub(pythonClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins)
+
+	var ttsClient *tts.VOICEVOXClient
+	if cfg.TTS.Enabled {
+		ttsClient = tts.NewVOICEVOX(cfg.TTS.VoicevoxURL, cfg.TTS.SpeakerID)
+		logger.Info("TTS enabled: VOICEVOX at %s, speaker=%d", cfg.TTS.VoicevoxURL, cfg.TTS.SpeakerID)
+	}
+
+	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)
