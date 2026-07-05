@@ -128,35 +128,15 @@ Go Runtime
 Python AI Service
   ↓ LLM response JSON
 Go Runtime
-  ↓ WebSocket: type:"ai_response"
-Python AI Service (TTS)
-  ↓ audio data
-Go Runtime
-  ↓ WebSocket: type:"audio"
+  ↓ VOICEVOX TTS (audio_query → synthesis)
+  ↓ WebSocket: type:"ai_response" (audio フィールドに base64 WAV)
 Unity Character
   ↓ text display → audio playback
 ```
 
-### 音声配送フロー
-
-1. Python AI Service が `assistant.text` から TTS 音声を生成
-2. Go Runtime が WebSocket で `ai_response` → `audio` の順に送信
-3. Unity が `ai_response` のテキストを字幕表示し、続く `audio` を再生
-4. 再生完了後、`state_change: IDLE` で待機状態に戻る
-
-### TTS 責務分担
-
-| 責務 | 担当 |
-|------|------|
-| TTS 音声生成 | Python AI Service |
-| 音声データ配送 | Go Runtime |
-| 音声再生・口パク同期 | Unity |
-
 ### Key additions in v0.4
 
-- WebSocket プロトコルに `audio` メッセージタイプを追加（`docs/api_contracts.md` 参照）
-- `ai_response` → `audio` の順でクライアントに配信し、request_id で紐付け
-- Unity 側で音声データ（base64 WAV/MP3）のデコード・再生に対応
-- `interruptible` フラグによる発話割り込み制御（`true` の場合、新規入力で再生中断）
-- TTS 生成は Python AI Service が担当（VOICEVOX 連携）
-- キャンセル制御: TTS 生成中・再生中の割り込みは Go Runtime の `context.Context` で管理
+- WebSocket `ai_response` に `audio` フィールド（base64 WAV）を追加（`docs/api_contracts.md` 参照）
+- Go Runtime が VOICEVOX を直接呼び出し（`internal/tts/` パッケージ）
+- `config.json` の `tts` セクションで有効化・話者設定
+- TTS 失敗時はログ出力のみで AI 応答テキストは通常通り返す
