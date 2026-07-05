@@ -6,13 +6,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 )
 
-func NewWebSearch(ollamaBaseURL string) tool.Executor {
+func NewWebSearch(webSearchURL, webSearchAPIKeyEnv string) tool.Executor {
+	var apiKey string
+	if webSearchAPIKeyEnv != "" {
+		apiKey = os.Getenv(webSearchAPIKeyEnv)
+	}
 	return tool.ExecutorFunc(func(args json.RawMessage) (string, error) {
 		var params struct {
 			Query      string `json:"query"`
@@ -27,30 +32,30 @@ func NewWebSearch(ollamaBaseURL string) tool.Executor {
 		if params.MaxResults <= 0 {
 			params.MaxResults = 3
 		}
-		if ollamaBaseURL != "" {
-			return searchViaOllama(ollamaBaseURL, params.Query, params.MaxResults)
+		if webSearchURL != "" && apiKey != "" {
+			return searchViaWebSearchAPI(webSearchURL, apiKey, params.Query, params.MaxResults)
 		}
 		return searchViaDuckDuckGo(params.Query, params.MaxResults)
 	})
 }
 
-func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
+func searchViaWebSearchAPI(apiURL, apiKey, query string, maxResults int) (string, error) {
 	reqBody := fmt.Sprintf(`{"query":%q}`, query)
-	endpoint := strings.TrimRight(baseURL, "/") + "/api/search"
-	req, err := http.NewRequest("POST", endpoint, strings.NewReader(reqBody))
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("web_search: %w", err)
+		return "", fmt.Errorf("web_search: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("web_search: ollama search failed: %w", err)
+		return "", fmt.Errorf("web_search: API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("web_search: ollama returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("web_search: API returned %d: %s", resp.StatusCode, string(body))
 	}
 	var result struct {
 		Results []struct {
@@ -62,9 +67,17 @@ func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("web_search: parse error: %w", err)
 	}
+	return formatSearchResults(result.Results, maxResults), nil
+}
+
+func formatSearchResults(results []struct {
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	Description string `json:"description"`
+}, maxResults int) string {
 	var out strings.Builder
 	count := 0
-	for _, r := range result.Results {
+	for _, r := range results {
 		if count >= maxResults {
 			break
 		}
@@ -72,9 +85,9 @@ func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
 		count++
 	}
 	if out.Len() == 0 {
-		return "no results found", nil
+		return "no results found"
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(out.String())
 }
 
 func searchViaDuckDuckGo(query string, maxResults int) (string, error) {

@@ -102,7 +102,7 @@ func main() {
 func setupAgent(cfg *config.Config) *agent.Loop {
 	registry := tool.NewRegistry()
 
-	webSearch := tools.NewWebSearch(cfg.Ollama.BaseURL)
+	webSearch := tools.NewWebSearch(cfg.Agent.WebSearchURL, cfg.Agent.WebSearchAPIKeyEnv)
 	webFetch := tools.NewWebFetch()
 	audioControl := tools.NewAudioControl(nil)
 	setState := tools.NewSetState(nil)
@@ -134,14 +134,14 @@ func setupAgent(cfg *config.Config) *agent.Loop {
 
 	registry.Register(tool.Definition{
 		Name:        "audio_control",
-		Description: "Control audio playback. Actions: mute, unmute, volume_up, volume_down, pause, resume.",
+		Description: "Control audio playback. Actions: stop, clear_queue.",
 		Parameters: tool.Parameters{
 			Type: "object",
 			Properties: map[string]tool.Property{
 				"action": {
 					Type:        "string",
 					Description: "The audio action to perform",
-					Enum:        []string{"mute", "unmute", "volume_up", "volume_down", "pause", "resume"},
+					Enum:        []string{"stop", "clear_queue"},
 				},
 			},
 			Required: []string{"action"},
@@ -150,14 +150,14 @@ func setupAgent(cfg *config.Config) *agent.Loop {
 
 	registry.Register(tool.Definition{
 		Name:        "set_state",
-		Description: "Change the AI companion's state. Valid states: idle, listening, thinking, speaking, sleeping.",
+		Description: "Change the AI companion's state. Valid states: IDLE, LISTENING, THINKING, SPEAKING.",
 		Parameters: tool.Parameters{
 			Type: "object",
 			Properties: map[string]tool.Property{
 				"state": {
 					Type:        "string",
 					Description: "The target state",
-					Enum:        []string{"idle", "listening", "thinking", "speaking", "sleeping"},
+					Enum:        []string{"IDLE", "LISTENING", "THINKING", "SPEAKING"},
 				},
 			},
 			Required: []string{"state"},
@@ -178,5 +178,9 @@ func setupAgent(cfg *config.Config) *agent.Loop {
 		Model:         cfg.Ollama.Model,
 		OllamaTimeout: time.Duration(cfg.Ollama.TimeoutMs) * time.Millisecond,
 		SystemPrompt:  cfg.Agent.SystemPrompt,
+		RuntimeCtx: &agent.RuntimeContext{
+			Timezone: cfg.Agent.Timezone,
+			Locale:   cfg.Agent.Locale,
+		},
 	})
 }
