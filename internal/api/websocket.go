@@ -116,9 +116,15 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		_, msgBytes, err := conn.ReadMessage()
+		msgType, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			break
+		}
+
+		// Binary frame → audio chunk
+		if msgType == websocket.BinaryMessage {
+			h.handleAudioChunk(msgBytes)
+			continue
 		}
 
 		var msg WSMessage
