@@ -299,3 +299,53 @@ func reachState(t *testing.T, sm *StateMachine, target State) {
 		}
 	}
 }
+
+// TestConcurrentTransitions ensures StateMachine is safe for concurrent use.
+// Run with: go test -race -count=1 ./internal/state/
+func TestConcurrentTransitions(t *testing.T) {
+	sm := New(nil)
+
+	// Simulate multiple goroutines performing transitions and reads concurrently.
+	// This mimics real-world usage where WebSocket handlers and AI service callbacks
+	// access the StateMachine from different goroutines.
+	done := make(chan bool)
+	n := 20
+
+	for i := 0; i < n; i++ {
+		go func() {
+			// Read current state
+			_ = sm.Current()
+			done <- true
+		}()
+	}
+	for i := 0; i < n; i++ {
+		<-done
+	}
+
+	// Concurrent transitions: interleave valid transitions, reads, and resets
+	errs := make(chan error, n*3)
+	for i := 0; i < n; i++ {
+		go func() {
+			// Ignore errors — invalid transitions are expected in concurrent access
+			_ = sm.Transition(LISTENING)
+			errs <- nil
+		}()
+		go func() {
+			_ = sm.Current()
+			errs <- nil
+		}()
+		go func() {
+			sm.Reset()
+			errs <- nil
+		}()
+	}
+	for i := 0; i < n*3; i++ {
+		<-errs
+	}
+
+	// Final state should be valid
+	final := sm.Current()
+	if final < IDLE || final > SPEAKING {
+		t.Errorf("invalid final state after concurrent access: %d", final)
+	}
+}

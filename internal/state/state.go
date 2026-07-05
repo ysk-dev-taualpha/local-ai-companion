@@ -1,6 +1,9 @@
 package state
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // State is the conversation state of the AI companion.
 type State int
@@ -33,9 +36,11 @@ func (s State) String() string {
 type StateChangeCallback func(from, to State)
 
 // StateMachine manages conversation state with validated transitions.
+// All methods are safe for concurrent use.
 type StateMachine struct {
-	current   State
-	onChange  StateChangeCallback
+	mu          sync.Mutex
+	current     State
+	onChange    StateChangeCallback
 	transitions map[State]map[State]bool
 }
 
@@ -57,12 +62,16 @@ func New(callback StateChangeCallback) *StateMachine {
 
 // Current returns the current state.
 func (sm *StateMachine) Current() State {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	return sm.current
 }
 
 // Transition attempts to change to the target state.
 // Returns an error if the transition is not allowed.
 func (sm *StateMachine) Transition(to State) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	if sm.current == to {
 		return nil
 	}
@@ -80,6 +89,8 @@ func (sm *StateMachine) Transition(to State) error {
 // Reset forces the state machine back to IDLE regardless of current state.
 // The callback is invoked if the state actually changes.
 func (sm *StateMachine) Reset() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	if sm.current != IDLE {
 		from := sm.current
 		sm.current = IDLE
