@@ -111,3 +111,40 @@ Operations affected by cancellation:
 - TTS playback
 - response streaming
 - character speech events
+
+## v0.4: TTS Data Flow
+
+v0.4 では TTS 出力が追加され、Python AI Service が生成した音声データが Go Runtime 経由で Unity に配送される。
+
+```text
+User
+  ↓ text (WebSocket)
+Unity
+  ↓ {"type":"text", ...}
+Go Runtime
+  ↓ HTTP POST /v1/conversation
+Python AI Service
+  ↓ assistant response + audio data
+Go Runtime
+  ↓ WebSocket: ai_response + audio
+Unity
+  ↓ 字幕表示 + 音声再生
+User
+```
+
+### 音声配送フロー
+
+1. Python AI Service が `assistant.text` から TTS 音声を生成
+2. Go Runtime が WebSocket で `ai_response` → `audio` の順に送信
+3. Unity が `ai_response` のテキストを字幕表示し、続く `audio` を再生
+4. 再生完了後、`state_change: IDLE` で待機状態に戻る
+
+### TTS 責務分担
+
+| 責務 | 担当 |
+|------|------|
+| TTS 音声生成 | Python AI Service |
+| 音声データ配送 | Go Runtime |
+| 音声再生・口パク同期 | Unity |
+
+TTS の詳細な API 契約は [api_contracts.md](api_contracts.md) の TTS セクションを参照。
