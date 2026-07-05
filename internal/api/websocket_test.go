@@ -189,11 +189,39 @@ func TestHandleWS_ConnectionCountAfterClose(t *testing.T) {
 
 func TestHandleWS_Broadcast(t *testing.T) {
 	hub := newTestHub(t)
-	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+
+	// HandleWS を使わず、独自ハンドラで接続をアップグレードし hub に登録する。
+	// HandleWS の ReadMessage ループがテスト goroutine の ReadMessage と競合して
+	// CI でハングするのを防ぐため。
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		hub.mu.Lock()
+		hub.conns[conn] = &wsConnState{}
+		hub.mu.Unlock()
+		// ReadMessage ループは開始しない。接続はテスト側で管理する。
+		// defer でクリーンアップ（HandleWS の defer と同様の処理）
+		defer func() {
+			hub.mu.Lock()
+			delete(hub.conns, conn)
+			hub.mu.Unlock()
+			conn.Close()
+		}()
+		// 接続が閉じられるまでブロック
+		_, _, err = conn.ReadMessage()
+	}))
 	defer srv.Close()
 
 	conn1 := wsClient(t, srv.URL)
 	conn2 := wsClient(t, srv.URL)
+
+	// 接続登録を待つ
+	if !waitForConnectionCount(t, hub, 2, 500*time.Millisecond) {
+		t.Fatalf("expected 2 connections, got %d", hub.ConnectionCount())
+	}
 
 	broadcastMsg := map[string]interface{}{
 		"type":    "broadcast",
