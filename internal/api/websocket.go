@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/agent"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/message"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
@@ -72,26 +73,34 @@ type wsConnState struct {
 	writeMu sync.Mutex
 }
 
-type WebSocketHub struct {
-	mu               sync.RWMutex
-	stateMu          sync.Mutex
-	conns            map[*websocket.Conn]*wsConnState
-	pythonClient     PythonClient
-	ttsClient        tts.TTSClient
-	stateMachine     *state.StateMachine
-	agentLoop        *agent.Loop
-	requestTimeoutMs int
-	upgrader         websocket.Upgrader
+// AudioChunkHandler receives parsed audio chunks from Unity WebSocket binary frames
+// for downstream processing (e.g., VAD, STT).
+type AudioChunkHandler interface {
+	HandleAudioChunk(chunk *message.AudioChunk) error
 }
 
-func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop) *WebSocketHub {
+type WebSocketHub struct {
+	mu                sync.RWMutex
+	stateMu           sync.Mutex
+	conns             map[*websocket.Conn]*wsConnState
+	pythonClient      PythonClient
+	ttsClient         tts.TTSClient
+	stateMachine      *state.StateMachine
+	agentLoop         *agent.Loop
+	audioChunkHandler AudioChunkHandler
+	requestTimeoutMs  int
+	upgrader          websocket.Upgrader
+}
+
+func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop, audioChunkHandler AudioChunkHandler) *WebSocketHub {
 	return &WebSocketHub{
-		conns:            make(map[*websocket.Conn]*wsConnState),
-		pythonClient:     pythonClient,
-		ttsClient:        ttsClient,
-		stateMachine:     stateMachine,
-		agentLoop:        agentLoop,
-		requestTimeoutMs: requestTimeoutMs,
+		conns:             make(map[*websocket.Conn]*wsConnState),
+		pythonClient:      pythonClient,
+		ttsClient:         ttsClient,
+		stateMachine:      stateMachine,
+		agentLoop:         agentLoop,
+		audioChunkHandler: audioChunkHandler,
+		requestTimeoutMs:  requestTimeoutMs,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: buildCheckOrigin(allowedOrigins),
 		},
@@ -116,9 +125,14 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		_, msgBytes, err := conn.ReadMessage()
+		msgType, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			break
+		}
+
+		if msgType == websocket.BinaryMessage {
+			h.handleAudioChunk(msgBytes)
+			continue
 		}
 
 		var msg WSMessage
@@ -136,6 +150,26 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		default:
 			h.handleEcho(conn, msg)
 		}
+	}
+}
+
+// handleAudioChunk parses a binary audio_chunk frame and forwards it to the
+// registered AudioChunkHandler for downstream VAD/STT processing.
+func (h *WebSocketHub) handleAudioChunk(frame []byte) {
+	chunk, err := message.ParseAudioChunk(frame)
+	if err != nil {
+		log.Printf("websocket: audio_chunk parse error: %v", err)
+		return
+	}
+
+	if h.audioChunkHandler != nil {
+		if err := h.audioChunkHandler.HandleAudioChunk(chunk); err != nil {
+			log.Printf("websocket: audio_chunk handler error (request_id=%s seq=%d): %v",
+				chunk.RequestID, chunk.Seq, err)
+		}
+	} else {
+		log.Printf("websocket: audio_chunk received but no handler registered (request_id=%s seq=%d sr=%d samples=%d)",
+			chunk.RequestID, chunk.Seq, chunk.SampleRate, len(chunk.Samples))
 	}
 }
 
