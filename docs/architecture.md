@@ -112,39 +112,31 @@ Operations affected by cancellation:
 - response streaming
 - character speech events
 
-## v0.4: TTS Data Flow
+## v0.4: TTS Integration
 
-v0.4 では TTS 出力が追加され、Python AI Service が生成した音声データが Go Runtime 経由で Unity に配送される。
+v0.4 では TTS（Text-to-Speech）連携を導入。Python AI Service が生成した応答テキストを音声に変換し、WebSocket 経由で Unity クライアントに配信する。
+
+### v0.4 Data Flow
 
 ```text
 User
-  ↓ text (WebSocket)
+  ↓ voice / text
 Unity
-  ↓ {"type":"text", ...}
+  ↓ WebSocket: type:"text"
 Go Runtime
-  ↓ HTTP POST /v1/conversation
+  ↓ HTTP request
 Python AI Service
-  ↓ assistant response + audio data
+  ↓ LLM response JSON
 Go Runtime
-  ↓ WebSocket: ai_response + audio
-Unity
-  ↓ 字幕表示 + 音声再生
-User
+  ↓ VOICEVOX TTS (audio_query → synthesis)
+  ↓ WebSocket: type:"ai_response" (audio フィールドに base64 WAV)
+Unity Character
+  ↓ text display → audio playback
 ```
 
-### 音声配送フロー
+### Key additions in v0.4
 
-1. Python AI Service が `assistant.text` から TTS 音声を生成
-2. Go Runtime が WebSocket で `ai_response` → `audio` の順に送信
-3. Unity が `ai_response` のテキストを字幕表示し、続く `audio` を再生
-4. 再生完了後、`state_change: IDLE` で待機状態に戻る
-
-### TTS 責務分担
-
-| 責務 | 担当 |
-|------|------|
-| TTS 音声生成 | Python AI Service |
-| 音声データ配送 | Go Runtime |
-| 音声再生・口パク同期 | Unity |
-
-TTS の詳細な API 契約は [api_contracts.md](api_contracts.md) の TTS セクションを参照。
+- WebSocket `ai_response` に `audio` フィールド（base64 WAV）を追加（`docs/api_contracts.md` 参照）
+- Go Runtime が VOICEVOX を直接呼び出し（`internal/tts/` パッケージ）
+- `config.json` の `tts` セクションで有効化・話者設定
+- TTS 失敗時はログ出力のみで AI 応答テキストは通常通り返す
