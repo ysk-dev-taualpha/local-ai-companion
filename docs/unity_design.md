@@ -127,6 +127,38 @@ Chat log UI
 v0.3 では `assistant.text` をチャット履歴へ表示する。
 `emotion`、`motion`、`speak_style`、`interruptible` は将来のキャラクター制御に使う。
 
+### Audio Response（v0.4）
+
+v0.4 では `ai_response` に続いて `audio` メッセージが送信される。
+
+```text
+Runtime
+  ↓ ai_response
+  ↓ audio
+WebSocketClient
+  ↓ OnMessageReceived
+UIManager / AudioPresenter
+  ↓ AppendResponse + PlayAudio
+Chat log UI + Audio playback
+```
+
+受信形式:
+
+```json
+{
+  "type": "audio",
+  "request_id": "uuid",
+  "format": "wav",
+  "sample_rate": 24000,
+  "channels": 1,
+  "data": "base64_encoded_audio_data",
+  "is_last": true
+}
+```
+
+Unity の `AudioPresenter` が Base64 データをデコードし、`AudioSource` で再生する。
+`interruptible: true` の場合、ユーザー入力で再生を中断できる。
+
 ## Component Design
 
 ### UIManager
@@ -256,8 +288,9 @@ UIManager / CharacterPresenter / AudioPresenter
 
 ### Audio and Lip Sync
 
-TTS 音声再生が入る段階では、Unity は音声再生と口パクの同期を担当する。
-TTS 生成そのものは Runtime / Python AI Service 側の責務とする。
+v0.4 では TTS 音声再生が追加される。Unity は `audio` メッセージの受信と再生、口パクの同期を担当する。
+TTS 生成そのものは Python AI Service、配送は Go Runtime の責務とする。
+詳細は [api_contracts.md](api_contracts.md) の TTS セクションを参照。
 
 ## Design Rules
 
