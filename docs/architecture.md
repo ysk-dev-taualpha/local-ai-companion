@@ -112,24 +112,29 @@ Operations affected by cancellation:
 - response streaming
 - character speech events
 
-## v0.4: TTS Data Flow
+## v0.4: TTS Integration
 
-v0.4 では TTS 出力が追加され、Python AI Service が生成した音声データが Go Runtime 経由で Unity に配送される。
+v0.4 では TTS（Text-to-Speech）連携を導入。Python AI Service が生成した応答テキストを音声に変換し、WebSocket 経由で Unity クライアントに配信する。
+
+### v0.4 Data Flow
 
 ```text
 User
-  ↓ text (WebSocket)
+  ↓ voice / text
 Unity
-  ↓ {"type":"text", ...}
+  ↓ WebSocket: type:"text"
 Go Runtime
-  ↓ HTTP POST /v1/conversation
+  ↓ HTTP request
 Python AI Service
-  ↓ assistant response + audio data
+  ↓ LLM response JSON
 Go Runtime
-  ↓ WebSocket: ai_response + audio
-Unity
-  ↓ 字幕表示 + 音声再生
-User
+  ↓ WebSocket: type:"ai_response"
+Python AI Service (TTS)
+  ↓ audio data
+Go Runtime
+  ↓ WebSocket: type:"audio"
+Unity Character
+  ↓ text display → audio playback
 ```
 
 ### 音声配送フロー
@@ -147,4 +152,11 @@ User
 | 音声データ配送 | Go Runtime |
 | 音声再生・口パク同期 | Unity |
 
-TTS の詳細な API 契約は [api_contracts.md](api_contracts.md) の TTS セクションを参照。
+### Key additions in v0.4
+
+- WebSocket プロトコルに `audio` メッセージタイプを追加（`docs/api_contracts.md` 参照）
+- `ai_response` → `audio` の順でクライアントに配信し、request_id で紐付け
+- Unity 側で音声データ（base64 WAV/MP3）のデコード・再生に対応
+- `interruptible` フラグによる発話割り込み制御（`true` の場合、新規入力で再生中断）
+- TTS 生成は Python AI Service が担当（VOICEVOX 連携）
+- キャンセル制御: TTS 生成中・再生中の割り込みは Go Runtime の `context.Context` で管理
