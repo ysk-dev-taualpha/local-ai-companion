@@ -58,7 +58,7 @@ class SileroVAD:
             st = self._vad_state if self._vad_state is not None else s0
             if self._session is None: raise RuntimeError("no model")
             out = self._session.run(None, {"input": arr, "state": st, "sr": sr})
-            prob = float(out[0][0][0]); self._vad_state = out[1]
+            prob = float(out[0].item()); self._vad_state = out[1]
             self._speech_buffer.extend(struct.pack(f"<{fs}h", *frame))
             if prob >= self.config.speech_threshold:
                 self._speech_count += 1; self._silence_count = 0
