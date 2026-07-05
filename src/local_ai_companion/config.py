@@ -32,11 +32,22 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class VADConfig:
+    enabled: bool = False
+    sample_rate: int = 16000
+    speech_threshold: float = 0.5
+    silence_duration_ms: int = 300
+    min_speech_duration_ms: int = 500
+    model_path: str = "models/silero_vad.onnx"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    vad: VADConfig = field(default_factory=VADConfig)
 
 
 def load_config(path=None):
@@ -50,6 +61,7 @@ def load_config(path=None):
     llm = raw.get("llm", {})
     prompt_raw = raw.get("prompt", {})
     logging_raw = raw.get("logging", {})
+    vad_raw = raw.get("vad", {})
 
     return AppConfig(
         conversation=ConversationConfig(
@@ -72,6 +84,14 @@ def load_config(path=None):
             log_dir=logging_raw.get("log_dir", ""),
             include_user_text=logging_raw.get("include_user_text", False),
             include_raw_response=logging_raw.get("include_raw_response", False),
+        ),
+        vad=VADConfig(
+            enabled=vad_raw.get("enabled", False),
+            sample_rate=int(vad_raw.get("sample_rate", 16000)),
+            speech_threshold=float(vad_raw.get("speech_threshold", 0.5)),
+            silence_duration_ms=int(vad_raw.get("silence_duration_ms", 300)),
+            min_speech_duration_ms=int(vad_raw.get("min_speech_duration_ms", 500)),
+            model_path=vad_raw.get("model_path", "models/silero_vad.onnx"),
         ),
     )
 
