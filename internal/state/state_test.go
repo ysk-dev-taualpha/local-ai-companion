@@ -1,6 +1,9 @@
 package state
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestNewStartsIdle(t *testing.T) {
 	sm := New(nil)
@@ -207,6 +210,48 @@ func TestResetFromIdleNoCallback(t *testing.T) {
 	sm.Reset()
 	if called {
 		t.Error("callback should not fire when resetting from IDLE")
+	}
+}
+
+func TestStateMachineConcurrentAccess(t *testing.T) {
+	sm := New(nil)
+
+	const workers = 16
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				switch (worker + j) % 4 {
+				case 0:
+					_ = sm.Transition(LISTENING)
+				case 1:
+					_ = sm.Transition(THINKING)
+				case 2:
+					_ = sm.Transition(SPEAKING)
+				default:
+					sm.Reset()
+				}
+				_ = sm.Current()
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestStateMachineCallbackCanReadCurrent(t *testing.T) {
+	var sm *StateMachine
+	sm = New(func(from, to State) {
+		if got := sm.Current(); got != to {
+			t.Errorf("callback Current(): want %s, got %s", to, got)
+		}
+	})
+
+	if err := sm.Transition(LISTENING); err != nil {
+		t.Fatal(err)
 	}
 }
 
