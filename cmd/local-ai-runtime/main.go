@@ -14,6 +14,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/config"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/pythonservice"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 )
 
@@ -29,6 +30,23 @@ func main() {
 
 	logger := logging.New(cfg.Logging.Level)
 	logger.Info("Go Runtime starting on %s", cfg.Runtime.ListenAddr)
+
+	pythonService := pythonservice.New(cfg.PythonService, logger)
+	if err := pythonService.Start(context.Background()); err != nil {
+		logger.Error("failed to start Python AI Service: %v", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownTimeout := time.Duration(cfg.PythonService.ShutdownTimeoutMs) * time.Millisecond
+		if shutdownTimeout <= 0 {
+			shutdownTimeout = 5 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := pythonService.Stop(ctx); err != nil {
+			logger.Error("failed to stop Python AI Service: %v", err)
+		}
+	}()
 
 	pythonClient := client.New(cfg.PythonService.BaseURL)
 	handler := api.New(pythonClient, cfg.Runtime.RequestTimeoutMs)
