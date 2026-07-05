@@ -19,5 +19,13 @@
     "log_dir": "logs",
     "include_user_text": false,
     "include_raw_response": false
+  },
+  "vad": {
+    "enabled": false,
+    "sample_rate": 16000,
+    "speech_threshold": 0.5,
+    "silence_duration_ms": 300,
+    "min_speech_duration_ms": 500,
+    "model_path": "models/silero_vad.onnx"
   }
 }
