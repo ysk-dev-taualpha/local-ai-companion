@@ -21,11 +21,10 @@ func NewAudioControl(callback AudioActionFunc) tool.Executor {
 			return "", fmt.Errorf("audio_control: action is required")
 		}
 		validActions := map[string]bool{
-			"mute": true, "unmute": true, "volume_up": true,
-			"volume_down": true, "pause": true, "resume": true,
+			"stop": true, "clear_queue": true,
 		}
 		if !validActions[params.Action] {
-			return "", fmt.Errorf("audio_control: invalid action %q (allowed: mute, unmute, volume_up, volume_down, pause, resume)", params.Action)
+			return "", fmt.Errorf("audio_control: invalid action %q (allowed: stop, clear_queue)", params.Action)
 		}
 		if callback == nil {
 			return fmt.Sprintf("audio %s acknowledged (no-op)", params.Action), nil

@@ -10,6 +10,9 @@ Go Runtime が tool の実行・権限制御・監査ログを担当する。
 ```
 ┌─────────────────────────────────────────────────┐
 │                  AgentLoop                       │
+│  ┌──────────────┐    ┌──────────────┐           │
+│  │ RuntimeCtx   │───▶│ System Msg   │           │
+│  └──────────────┘    └──────────────┘           │
 │  ┌──────────┐    ┌──────────────┐               │
 │  │ Ollama   │───▶│ ToolExecutor │               │
 │  │ Client   │◀───│              │               │
@@ -37,14 +40,14 @@ Go Runtime が tool の実行・権限制御・監査ログを担当する。
 
 ```
 internal/agent/
-├── tool.go         # Tool interface, ToolRegistry
-├── policy.go       # ToolPolicy (allowlist)
-├── executor.go     # ToolExecutor
-├── audit.go        # AuditLog
+├── context.go      # RuntimeContext (日時/タイムゾーン/locale)
 ├── ollama.go       # Ollama client (/api/chat with tools)
 ├── loop.go         # AgentLoop (orchestration)
+internal/tool/
+├── types.go        # Tool interface, Result
+├── registry.go     # ToolRegistry, ToolPolicy, ExecutorService
 └── tools/
-    ├── web_search.go    # DuckDuckGo Instant Answer API
+    ├── web_search.go    # Ollama Web Search API / DuckDuckGo fallback
     ├── web_fetch.go     # URL content fetch
     ├── audio_control.go # Audio playback control
     └── set_state.go     # State management
@@ -58,6 +61,9 @@ User Message
      ▼
 AgentLoop.Run(ctx, userMessage)
      │
+     ├── RuntimeContext.SystemInjection() を system message に注入
+     │   - Current date / time / timezone / locale
+     │
      ▼
 OllamaClient.Chat(messages, tools)
      │
@@ -70,7 +76,7 @@ OllamaClient.Chat(messages, tools)
            │
            ├── ToolPolicy.Check() → DENIED → error
            ├── ToolRegistry.Get()  → not found → error
-           └── Tool.Execute(ctx, args) → result/error
+           └── Tool.Execute(args) → result/error
                     │
                     ▼
             tool result → role:"tool" で messages に追加
@@ -92,33 +98,43 @@ OllamaClient.Chat(messages, tools)
 | 危険 tool 除外 | `write_file`, `run_command`, `git push` 等は初期実装に含めない |
 | context propagation | `ctx` を tool Execute に伝播、timeout/cancel で停止 |
 
+## RuntimeContext
+
+AgentLoop は LLM 呼び出しごとに system message に RuntimeContext を注入します:
+
+- `Current date` — 現在日付 (YYYY-MM-DD)
+- `Current time` — 現在時刻 (HH:MM:SS)
+- `Timezone` — 設定されたタイムゾーン（デフォルト: `Asia/Tokyo`）
+- `Locale` — 設定されたロケール（デフォルト: `ja-JP`）
+
 ## 初期 tool
 
 ### web_search
 
-- **provider**: DuckDuckGo Instant Answer API（API キー不要）
+- **provider**: Ollama 公式 Web Search API（`agent.web_search_url` 設定時、API キー必須）
+- **fallback**: DuckDuckGo Instant Answer API（API キー未設定時、無料）
 - **インターフェース**: `WebSearchProvider`（将来 SearxNG / Brave / Tavily に差し替え可）
-- **パラメータ**: `query` (必須), `max_results` (1-10, デフォルト 5)
-- **戻り値**: `{"results": [...], "query": "..."}`
+- **パラメータ**: `query` (必須), `max_results` (1-10, デフォルト 3)
+- **戻り値**: 検索結果のテキストリスト
 
 ### web_fetch
 
 - **説明**: URL のコンテンツを取得（HTML → テキスト抽出）
 - **制限**: http/https のみ、1MB 応答制限、10000 文字に切り詰め
 - **パラメータ**: `url` (必須)
-- **戻り値**: `{"url": "...", "content": "...", "status_code": N}`
+- **戻り値**: `{\"url\": \"...\", \"content\": \"...\", \"status_code\": N}`
 
 ### audio_control
 
 - **説明**: Unity クライアントへの音声制御指示
-- **パラメータ**: `action` (必須, enum: speak/stop/pause/resume)
-- **戻り値**: `{"action": "...", "message": "..."}`
+- **パラメータ**: `action` (必須, enum: stop/clear_queue)
+- **戻り値**: アクションの確認メッセージ
 
 ### set_state
 
 - **説明**: コンパニオンの状態設定
-- **パラメータ**: `state` (必須, 文字列)
-- **戻り値**: `{"previous": "...", "current": "..."}`
+- **パラメータ**: `state` (必須, enum: IDLE/LISTENING/THINKING/SPEAKING)
+- **戻り値**: 状態変更の確認メッセージ
 
 ## 設定
 
@@ -126,18 +142,21 @@ OllamaClient.Chat(messages, tools)
 {
   "agent": {
     "enabled": false,
-    "ollama_url": "http://192.168.12.107:11434",
-    "ollama_model": "g4v100",
-    "max_iter": 5,
-    "system_prompt": "",
-    "allowed_tools": [],
-    "audit_size": 1000
+    "max_tool_loops": 5,
+    "system_prompt": "...",
+    "allowed_tools": ["web_search", "web_fetch", "audio_control", "set_state"],
+    "timezone": "Asia/Tokyo",
+    "locale": "ja-JP",
+    "web_search_url": "https://ollama.com/api/web_search",
+    "web_search_api_key_env": "OLLAMA_WEB_SEARCH_KEY"
   }
 }
 ```
 
+- `timezone` / `locale` — RuntimeContext で使用（デフォルト: `Asia/Tokyo`, `ja-JP`）
+- `web_search_url` — Ollama 公式 Web Search API のエンドポイント
+- `web_search_api_key_env` — API キーが保存されている環境変数名（空の場合は DuckDuckGo fallback）
 - `allowed_tools` が空の場合は全 tool 許可（allowlist 無効）
-- `audit_size` は監査ログの最大エントリ数（0 = 無制限）
 
 ## 監査ログ
 

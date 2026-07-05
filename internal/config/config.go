@@ -44,10 +44,14 @@ type OllamaConfig struct {
 
 // AgentConfig は AgentLoop の設定です。
 type AgentConfig struct {
-	Enabled      bool     `json:"enabled"`
-	MaxToolLoops int      `json:"max_tool_loops"`
-	SystemPrompt string   `json:"system_prompt"`
-	AllowedTools []string `json:"allowed_tools"`
+	Enabled            bool     `json:"enabled"`
+	MaxToolLoops       int      `json:"max_tool_loops"`
+	SystemPrompt       string   `json:"system_prompt"`
+	AllowedTools       []string `json:"allowed_tools"`
+	Timezone           string   `json:"timezone"`
+	Locale             string   `json:"locale"`
+	WebSearchURL       string   `json:"web_search_url"`
+	WebSearchAPIKeyEnv string   `json:"web_search_api_key_env"`
 }
 
 type Config struct {
@@ -86,10 +90,14 @@ func Load(path string) (*Config, error) {
 			TimeoutMs: 60000,
 		},
 		Agent: AgentConfig{
-			Enabled:      false,
-			MaxToolLoops: 5,
-			SystemPrompt: "あなたは local-ai-companion です。日本語で応答し、必要に応じてツールを使用してください。",
-			AllowedTools: []string{"web_search", "web_fetch", "audio_control", "set_state"},
+			Enabled:            false,
+			MaxToolLoops:       5,
+			SystemPrompt:       "あなたは local-ai-companion です。日本語で応答し、必要に応じてツールを使用してください。",
+			AllowedTools:       []string{"web_search", "web_fetch", "audio_control", "set_state"},
+			Timezone:           "Asia/Tokyo",
+			Locale:             "ja-JP",
+			WebSearchURL:       "https://ollama.com/api/web_search",
+			WebSearchAPIKeyEnv: "",
 		},
 	}
 
