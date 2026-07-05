@@ -28,11 +28,18 @@ type LoggingConfig struct {
 	Level string `json:"level"`
 }
 
+type TTSConfig struct {
+	Enabled     bool   `json:"enabled"`
+	VoicevoxURL string `json:"voicevox_url"`
+	SpeakerID   int    `json:"speaker_id"`
+}
+
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
 	WebSocket     WebSocketConfig     `json:"websocket"`
 	PythonService PythonServiceConfig `json:"python_service"`
 	Logging       LoggingConfig       `json:"logging"`
+	TTS           TTSConfig           `json:"tts"`
 }
 
 func Load(path string) (*Config, error) {
@@ -48,6 +55,11 @@ func Load(path string) (*Config, error) {
 		},
 		Logging: LoggingConfig{
 			Level: "info",
+		},
+		TTS: TTSConfig{
+			Enabled:     false,
+			VoicevoxURL: "http://127.0.0.1:50021",
+			SpeakerID:   3,
 		},
 	}
 
