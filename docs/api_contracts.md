@@ -636,3 +636,335 @@ TTS 生成中・再生中にキャンセルが発生した場合:
 - Go Runtime が TTS 生成をキャンセルする
 - Unity は再生中の音声を停止し、キューをクリアする
 - キャンセル後は `state_change: IDLE` が送信される
+
+
+## Voice Input（v0.5）
+
+v0.5 で導入される音声入力（Voice Input）の API 契約。
+
+### 概要
+
+Unity からマイク音声を PCM チャンク単位でストリーミングし、Go Runtime が VAD と STT をパイプラインで処理する。Unity は音声送信と認識結果の表示のみを担当する。
+
+### データフロー
+
+```text
+Unity（マイク入力）
+  ↓ WebSocket: audio_chunk (binary, 100ms PCM)
+Go Runtime
+  ↓ HTTP POST: /vad/chunk (octet-stream)
+Python VAD Service (:8092)
+  ↓ VAD イベント（speech_start / speech_end / idle）
+Go Runtime
+  ↓ VAD 終了後、WAV に結合
+  ↓ HTTP POST: /v1/transcribe (multipart/form-data)
+WinPC faster-whisper (:8093)
+  ↓ 認識テキスト
+Go Runtime
+  ↓ WebSocket: vad_event → speech_recognized
+Unity（認識結果表示）
+```
+
+### WebSocket メッセージ仕様
+
+#### audio_chunk（Unity → Go）
+
+**種別:** バイナリフレーム
+
+音声データを 100ms 単位のチャンクに分割し、バイナリフレームとしてストリーミング送信する。
+
+| オフセット | サイズ | 型 | フィールド | 説明 |
+|-----------|--------|-----|-----------|------|
+| 0 | 16 bytes | string | `request_id` | リクエスト識別子（null 終端 UTF-8） |
+| 16 | 4 bytes | uint32 | `seq` | チャンクのシーケンス番号（0 始まり） |
+| 20 | 2 bytes | uint16 | `sample_rate` | サンプルレート（Hz）。既定値 16000 |
+| 22 | N bytes | int16[] | `samples` | PCM 16bit リトルエンディアンのサンプル配列 |
+
+**制約:**
+
+- 1 チャンクは 100ms 相当のサンプル数（16000 Hz の場合 1600 サンプル）
+- `seq` は連続した整数。ギャップがある場合はエラー
+- `seq` が 0 のチャンクで新しい発話セッションが開始される
+- バイナリフレームの先頭 22 bytes がヘッダ、残りが PCM データ
+
+**実装箇所（将来）:** `internal/api/websocket.go` → `HandleWS` 内のバイナリフレーム処理
+
+#### vad_event（Go → Unity）
+
+VAD（Voice Activity Detection）の判定結果を通知する。
+
+```json
+{
+  "type": "vad_event",
+  "request_id": "req-001",
+  "event": "speech_start"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|:--:|------|
+| `type` | string | **必須** | `"vad_event"` 固定 |
+| `request_id` | string | **必須** | `audio_chunk` ヘッダの `request_id` |
+| `event` | string | **必須** | `"speech_start"` または `"speech_end"` |
+
+**イベント:**
+
+| event | 説明 |
+|-------|------|
+| `"speech_start"` | 音声区間の開始を検出 |
+| `"speech_end"` | 音声区間の終了を検出。この後に STT が実行される |
+
+**タイミング:**
+
+- `speech_start` は最初の有効な音声チャンク受信時に送信
+- `speech_end` は VAD が無音区間を検出した時点で送信
+
+**実装箇所（将来）:** `internal/api/websocket.go` → VAD イベントハンドリング
+
+#### speech_recognized（Go → Unity）
+
+STT の認識結果を通知する。ユーザーは認識結果をキャンセル可能。
+
+```json
+{
+  "type": "speech_recognized",
+  "request_id": "req-001",
+  "text": "こんにちは、元気ですか？",
+  "cancelable": true
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|:--:|------|
+| `type` | string | **必須** | `"speech_recognized"` 固定 |
+| `request_id` | string | **必須** | 対応する `audio_chunk` の `request_id` |
+| `text` | string | **必須** | STT による認識テキスト |
+| `cancelable` | boolean | **必須** | 認識結果をキャンセル可能かどうか |
+
+**制約:**
+
+- `text` は空文字列不可（STT が無音または認識失敗の場合は送信しない）
+- `cancelable: true` の場合、Unity は一定時間（例: 3 秒）キャンセル UI を表示する
+- `cancelable: false` の場合、認識結果は確定済みで即座に AI 処理へ進む
+
+**実装箇所（将来）:** `internal/api/websocket.go` → STT 結果の処理
+
+#### cancel_speech（Unity → Go）
+
+認識結果の確定前に、ユーザーがキャンセルを指示する。
+
+```json
+{
+  "type": "cancel_speech",
+  "request_id": "req-001"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|:--:|------|
+| `type` | string | **必須** | `"cancel_speech"` 固定 |
+| `request_id` | string | **必須** | キャンセル対象の `request_id` |
+
+**挙動:**
+
+- Go Runtime が `request_id` に対応する STT 処理をキャンセルする
+- キャンセル後、Go Runtime は `state_change: IDLE` を送信する
+- 既に AI 処理が開始されている場合はキャンセル不可（エラー応答）
+
+**エラー応答（キャンセル失敗時）:**
+
+```json
+{
+  "type": "error",
+  "request_id": "req-001",
+  "error": "speech already processing, cannot cancel"
+}
+```
+
+### WebSocket シーケンス（音声入力フロー）
+
+```text
+1. Unity → Go:  audio_chunk (binary, seq=0)  ── 発話開始
+2. Go → Unity:  vad_event (speech_start)
+3. Unity → Go:  audio_chunk (seq=1..N-1)     ── 継続
+4. Go → Unity:  vad_event (speech_end)        ── 発話終了検出
+5. Go → Python: POST /vad/chunk (蓄積した PCM)
+6. Python → Go: {"event":"idle"} → 不要なチャンク破棄
+7. Go → WinPC:  POST /v1/transcribe (WAV)     ── STT 実行
+8. WinPC → Go:  {"text":"...", ...}
+9. Go → Unity:  speech_recognized              ── 認識結果
+10. Unity がキャンセル可能期間（cancelable: true の場合）
+11. Unity が確定 or キャンセル
+```
+
+### HTTP API 仕様
+
+#### Go → Python VAD /vad/chunk
+
+**メソッド:** `POST`
+
+**URL:** `http://127.0.0.1:8092/vad/chunk`
+
+**Content-Type:** `application/octet-stream`
+
+**リクエストボディ:** PCM int16 サンプル（リトルエンディアン、ヘッダなし raw PCM）
+
+**レスポンス (200):**
+
+```json
+{
+  "event": "speech_start"
+}
+```
+
+**レスポンス（無音継続時）:**
+
+```json
+{
+  "event": "idle"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|:--:|------|
+| `event` | string | **必須** | VAD 判定結果 |
+
+**event 一覧:**
+
+| event | 説明 |
+|-------|------|
+| `"speech_start"` | 音声区間の開始 |
+| `"speech_end"` | 音声区間の終了 |
+| `"idle"` | 無音区間（変化なし） |
+
+**制約:**
+
+- リクエストボディは 100ms 単位の PCM チャンク（16000 Hz の場合 3200 bytes）
+- Python VAD Service は Silero VAD を使用
+- 連続したチャンクの状態を内部で管理し、状態変化時にのみ `speech_start` / `speech_end` を返す
+
+**エラーレスポンス (400):**
+
+```json
+{
+  "error": "invalid chunk size: expected 3200 bytes, got 1600"
+}
+```
+
+**エラーレスポンス (500):**
+
+```json
+{
+  "error": "VAD model not loaded"
+}
+```
+
+**実装箇所（将来）:** `src/local_ai_companion/vad_server.py`
+
+#### Python → WinPC faster-whisper /v1/transcribe
+
+**メソッド:** `POST`
+
+**URL:** `http://192.168.12.107:8093/v1/transcribe`
+
+**Content-Type:** `multipart/form-data`
+
+**リクエストパラメータ:**
+
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|:--:|------|
+| `file` | file | **必須** | WAV ファイル（PCM 16bit、モノラル、16000 Hz） |
+| `language` | string | 任意 | 言語コード。既定値 `"ja"` |
+
+**成功レスポンス (200):**
+
+```json
+{
+  "text": "こんにちは、元気ですか？",
+  "duration": 3.2,
+  "error": null
+}
+```
+
+| フィールド | 型 | 説明 |
+|------------|-----|------|
+| `text` | string | 認識テキスト。空文字列の場合は認識失敗 |
+| `duration` | number | 音声の長さ（秒） |
+| `error` | string\|null | エラー文言。正常時は `null` |
+
+**エラーレスポンス (400):**
+
+```json
+{
+  "text": "",
+  "duration": 0,
+  "error": "no audio data in file"
+}
+```
+
+**エラーレスポンス (500):**
+
+```json
+{
+  "text": "",
+  "duration": 0,
+  "error": "STT model not loaded"
+}
+```
+
+**エラーレスポンス (503):**
+
+```json
+{
+  "text": "",
+  "duration": 0,
+  "error": "STT service unavailable"
+}
+```
+
+**制約:**
+
+- 音声ファイルは WAV（PCM 16bit、モノラル、16000 Hz）
+- `language` 未指定時は `"ja"`（日本語）
+- STT モデル: faster-whisper small（CUDA、WinPC）
+- タイムアウト: 10 秒（Go Runtime 側で管理）
+
+**実装箇所（将来）:** WinPC 上の `scripts/stt_server.py`
+
+### エラーレスポンス形式（統一）
+
+v0.5 の全エンドポイントで使用するエラーレスポンスの基本形式:
+
+```json
+{
+  "error": "エラーメッセージ"
+}
+```
+
+WebSocket エラーの場合:
+
+```json
+{
+  "type": "error",
+  "request_id": "req-001",
+  "error": "エラーメッセージ"
+}
+```
+
+| フィールド | 型 | 説明 |
+|------------|-----|------|
+| `type` | string | WebSocket の場合 `"error"` 固定 |
+| `request_id` | string | 対応するリクエストの `request_id`（追跡可能な場合） |
+| `error` | string | 人間が読めるエラーメッセージ |
+
+### キャンセル制御
+
+音声入力パイプラインのキャンセルは Go Runtime が `context.Context` で管理する。
+
+| キャンセル契機 | 動作 |
+|---------------|------|
+| Unity が `cancel_speech` 送信 | STT 処理をキャンセル、`state_change: IDLE` |
+| 新しい `audio_chunk` (seq=0) 受信 | 前のセッションをキャンセル、新セッション開始 |
+| WebSocket 切断 | 全処理をキャンセル、リソース解放 |
+
+キャンセル後は必ず `state_change: IDLE` が送信され、Unity は待機状態に戻る。
