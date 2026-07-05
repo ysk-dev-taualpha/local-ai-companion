@@ -34,12 +34,30 @@ type TTSConfig struct {
 	SpeakerID   int    `json:"speaker_id"`
 }
 
+// OllamaConfig は Ollama サーバー接続設定です。
+type OllamaConfig struct {
+	Enabled   bool   `json:"enabled"`
+	BaseURL   string `json:"base_url"`
+	Model     string `json:"model"`
+	TimeoutMs int    `json:"timeout_ms"`
+}
+
+// AgentConfig は AgentLoop の設定です。
+type AgentConfig struct {
+	Enabled      bool     `json:"enabled"`
+	MaxToolLoops int      `json:"max_tool_loops"`
+	SystemPrompt string   `json:"system_prompt"`
+	AllowedTools []string `json:"allowed_tools"`
+}
+
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
 	WebSocket     WebSocketConfig     `json:"websocket"`
 	PythonService PythonServiceConfig `json:"python_service"`
 	Logging       LoggingConfig       `json:"logging"`
 	TTS           TTSConfig           `json:"tts"`
+	Ollama        OllamaConfig        `json:"ollama"`
+	Agent         AgentConfig         `json:"agent"`
 }
 
 func Load(path string) (*Config, error) {
@@ -60,6 +78,18 @@ func Load(path string) (*Config, error) {
 			Enabled:     false,
 			VoicevoxURL: "http://127.0.0.1:50021",
 			SpeakerID:   3,
+		},
+		Ollama: OllamaConfig{
+			Enabled:   false,
+			BaseURL:   "http://192.168.12.107:11434",
+			Model:     "g4v100",
+			TimeoutMs: 60000,
+		},
+		Agent: AgentConfig{
+			Enabled:      false,
+			MaxToolLoops: 5,
+			SystemPrompt: "あなたは local-ai-companion です。日本語で応答し、必要に応じてツールを使用してください。",
+			AllowedTools: []string{"web_search", "web_fetch", "audio_control", "set_state"},
 		},
 	}
 

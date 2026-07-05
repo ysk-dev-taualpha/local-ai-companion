@@ -12,20 +12,18 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/agent"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
 
-// buildCheckOrigin は許可された Origin リストから CheckOrigin 関数を生成します。
-// allowedOrigins が空の場合は localhost のみ許可、設定がある場合はリストと完全一致させます。
 func buildCheckOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	if len(allowedOrigins) == 0 {
-		// デフォルト: localhost のみ許可
 		return func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			if origin == "" {
-				return true // same-origin リクエスト（ブラウザが Origin を送らないこともある）
+				return true
 			}
 			u, err := url.Parse(origin)
 			if err != nil {
@@ -49,38 +47,31 @@ func buildCheckOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	}
 }
 
-// WSMessage は WebSocket で送受信する JSON メッセージのフォーマットです。
 type WSMessage struct {
 	Type      string `json:"type"`
 	Payload   string `json:"payload"`
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// WSAIResponse は AI 応答を含む WebSocket レスポンスです。
 type WSAIResponse struct {
 	Type           string                   `json:"type"`
 	RequestID      string                   `json:"request_id"`
 	ConversationID string                   `json:"conversation_id,omitempty"`
 	Assistant      *client.AssistantMessage `json:"assistant,omitempty"`
-	Audio          string                   `json:"audio,omitempty"` // base64 エンコードされた WAV 音声データ
+	Text           string                   `json:"text,omitempty"`
+	Audio          string                   `json:"audio,omitempty"`
 	Error          string                   `json:"error,omitempty"`
 }
 
-// WSStateNotification は状態変化をブロードキャストするメッセージです。
 type WSStateNotification struct {
 	Type  string `json:"type"`
 	State string `json:"state"`
 }
 
-// wsConnState は接続ごとの書き込み制御を保持します。
 type wsConnState struct {
 	writeMu sync.Mutex
 }
 
-// WebSocketHub は複数の WebSocket 接続を goroutine-safe に管理し、
-// 受信したテキストを AI Service に転送して応答を返します。
-// オプションで TTS クライアントを設定すると、AI 応答テキストを音声合成し
-// WSAIResponse の Audio フィールドに base64 エンコードして返します。
 type WebSocketHub struct {
 	mu               sync.RWMutex
 	stateMu          sync.Mutex
@@ -88,19 +79,18 @@ type WebSocketHub struct {
 	pythonClient     PythonClient
 	ttsClient        tts.TTSClient
 	stateMachine     *state.StateMachine
+	agentLoop        *agent.Loop
 	requestTimeoutMs int
 	upgrader         websocket.Upgrader
 }
 
-// NewWebSocketHub は新しい WebSocketHub を生成します。
-// allowedOrigins が空の場合は localhost のみ許可します。
-// ttsClient は省略可能です（nil の場合は TTS 無効）。
-func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string) *WebSocketHub {
+func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop) *WebSocketHub {
 	return &WebSocketHub{
 		conns:            make(map[*websocket.Conn]*wsConnState),
 		pythonClient:     pythonClient,
 		ttsClient:        ttsClient,
 		stateMachine:     stateMachine,
+		agentLoop:        agentLoop,
 		requestTimeoutMs: requestTimeoutMs,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: buildCheckOrigin(allowedOrigins),
@@ -108,9 +98,6 @@ func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMa
 	}
 }
 
-// HandleWS は /ws エンドポイントの WebSocket ハンドラです。
-// テキストメッセージ受信時に AI Service へ転送し、
-// StateMachine の状態遷移（LISTENING → THINKING → SPEAKING → IDLE）をブロードキャストします。
 func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -141,27 +128,27 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "text":
-			h.handleTextMessage(conn, msg)
+			if h.agentLoop != nil {
+				h.handleTextMessageAgent(conn, msg)
+			} else {
+				h.handleTextMessage(conn, msg)
+			}
 		default:
 			h.handleEcho(conn, msg)
 		}
 	}
 }
 
-// handleTextMessage はテキストメッセージを AI Service に転送し、
-// StateMachine の状態遷移をブロードキャストします。
-func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
+func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessage) {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
 
-	// IDLE→LISTENING 遷移
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
 		return
 	}
 	h.broadcastState("LISTENING")
 
-	// LISTENING→THINKING 遷移
 	if err := h.stateMachine.Transition(state.THINKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -170,7 +157,73 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	}
 	h.broadcastState("THINKING")
 
-	// AI Service に転送
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
+	defer cancel()
+
+	requestID := msg.RequestID
+	if requestID == "" {
+		requestID = newRequestID()
+	}
+
+	responseText, err := h.agentLoop.Run(ctx, msg.Payload, requestID)
+	if err != nil {
+		h.sendError(conn, requestID, err.Error())
+		h.broadcastState("IDLE")
+		h.stateMachine.Reset()
+		return
+	}
+
+	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
+		h.broadcastState("IDLE")
+		h.stateMachine.Reset()
+		h.sendError(conn, msg.RequestID, "invalid state transition to speaking: "+err.Error())
+		return
+	}
+	h.broadcastState("SPEAKING")
+
+	aiResp := WSAIResponse{
+		Type:      "ai_response",
+		RequestID: requestID,
+		Text:      responseText,
+	}
+
+	if h.ttsClient != nil && responseText != "" {
+		audioData, ttsErr := h.ttsClient.Speak(responseText)
+		if ttsErr != nil {
+			log.Printf("websocket: tts synthesis failed: %v", ttsErr)
+		} else {
+			aiResp.Audio = base64.StdEncoding.EncodeToString(audioData)
+		}
+	}
+	if err := h.writeJSON(conn, aiResp); err != nil {
+		log.Printf("websocket: failed to write ai_response: %v", err)
+	}
+
+	if err := h.stateMachine.Transition(state.IDLE); err != nil {
+		log.Printf("websocket: failed to transition to IDLE: %v", err)
+		h.stateMachine.Reset()
+	}
+	h.broadcastState("IDLE")
+}
+
+func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
+
+	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
+		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
+		return
+	}
+	h.broadcastState("LISTENING")
+
+	if err := h.stateMachine.Transition(state.THINKING); err != nil {
+		h.broadcastState("IDLE")
+		h.stateMachine.Reset()
+		h.sendError(conn, msg.RequestID, "invalid state transition to thinking: "+err.Error())
+		return
+	}
+	h.broadcastState("THINKING")
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
 	defer cancel()
 
@@ -186,7 +239,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		return
 	}
 
-	// THINKING→SPEAKING 遷移
 	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -195,7 +247,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	}
 	h.broadcastState("SPEAKING")
 
-	// AI 応答を返す
 	aiResp := WSAIResponse{
 		Type:           "ai_response",
 		RequestID:      resp.RequestID,
@@ -203,7 +254,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		Assistant:      &resp.Assistant,
 	}
 
-	// TTS 音声合成（オプション）
 	if h.ttsClient != nil && resp.Assistant.Text != "" {
 		audioData, ttsErr := h.ttsClient.Speak(resp.Assistant.Text)
 		if ttsErr != nil {
@@ -216,7 +266,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		log.Printf("websocket: failed to write ai_response: %v", err)
 	}
 
-	// SPEAKING→IDLE 遷移
 	if err := h.stateMachine.Transition(state.IDLE); err != nil {
 		log.Printf("websocket: failed to transition to IDLE: %v", err)
 		h.stateMachine.Reset()
@@ -224,7 +273,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	h.broadcastState("IDLE")
 }
 
-// handleEcho はテキスト以外のメッセージをエコーします（後方互換）。
 func (h *WebSocketHub) handleEcho(conn *websocket.Conn, msg WSMessage) {
 	resp := map[string]interface{}{
 		"type":       msg.Type + "_ack",
@@ -234,7 +282,6 @@ func (h *WebSocketHub) handleEcho(conn *websocket.Conn, msg WSMessage) {
 	h.writeJSON(conn, resp)
 }
 
-// sendError はエラーレスポンスを WebSocket クライアントに送信します。
 func (h *WebSocketHub) sendError(conn *websocket.Conn, requestID, errMsg string) {
 	errResp := WSAIResponse{
 		Type:      "error",
@@ -244,7 +291,6 @@ func (h *WebSocketHub) sendError(conn *websocket.Conn, requestID, errMsg string)
 	h.writeJSON(conn, errResp)
 }
 
-// broadcastState は現在の状態を全クライアントにブロードキャストします。
 func (h *WebSocketHub) broadcastState(stateName string) {
 	notif := WSStateNotification{
 		Type:  "state_change",
@@ -253,8 +299,6 @@ func (h *WebSocketHub) broadcastState(stateName string) {
 	h.Broadcast(notif)
 }
 
-// writeJSON は WebSocket 接続に JSON メッセージを書き込みます。
-// 接続ごとの write mutex で並行書き込みを防止します。
 func (h *WebSocketHub) writeJSON(conn *websocket.Conn, v interface{}) error {
 	h.mu.RLock()
 	cs := h.conns[conn]
@@ -272,16 +316,12 @@ func (h *WebSocketHub) writeJSON(conn *websocket.Conn, v interface{}) error {
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// Broadcast は接続中のすべてのクライアントにメッセージを送信します。
-// 接続スナップショットを取得後に書き込むため、書き込み中に
-// 接続が追加・削除されても安全です。
 func (h *WebSocketHub) Broadcast(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 
-	// 接続のスナップショットを取得
 	h.mu.RLock()
 	conns := make([]*websocket.Conn, 0, len(h.conns))
 	for conn := range h.conns {
@@ -303,7 +343,6 @@ func (h *WebSocketHub) Broadcast(msg interface{}) error {
 	return nil
 }
 
-// ConnectionCount は現在の接続数を返します。
 func (h *WebSocketHub) ConnectionCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
