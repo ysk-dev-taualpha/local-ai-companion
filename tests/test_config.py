@@ -91,6 +91,22 @@ class ConfigFileLoadingTests(unittest.TestCase):
         self.assertEqual(config.conversation.max_history_turns, 12)
         self.assertEqual(config.llm.provider, "mock")
 
+    def test_load_config_preserves_ollama_example_json_structure(self):
+        example_path = os.path.join(
+            os.path.dirname(__file__), "..", "config.ollama.example.json"
+        )
+        normalized = os.path.normpath(example_path)
+        config = load_config(normalized)
+        self.assertEqual(config.conversation.default_conversation_id, "local-dev")
+        self.assertEqual(config.llm.provider, "openai_compatible")
+        self.assertEqual(config.llm.base_url, "http://127.0.0.1:11434/v1")
+        self.assertEqual(config.llm.model, "g4v100")
+        self.assertEqual(config.prompt.system_prompt_path, "prompts/ollama_system.md")
+        self.assertEqual(
+            config.prompt.response_format_path,
+            "prompts/ollama_response_format.md",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,23 @@
+{
+  "conversation": {
+    "default_conversation_id": "local-dev",
+    "max_history_turns": 8
+  },
+  "llm": {
+    "provider": "openai_compatible",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "g4v100",
+    "api_key_env": "",
+    "timeout_seconds": 120.0
+  },
+  "prompt": {
+    "system_prompt_path": "prompts/ollama_system.md",
+    "response_format_path": "prompts/ollama_response_format.md"
+  },
+  "logging": {
+    "enabled": true,
+    "log_dir": "logs",
+    "include_user_text": false,
+    "include_raw_response": false
+  }
+}

@@ -132,6 +132,57 @@ class OpenAIProviderTests(unittest.TestCase):
             ],
         )
 
+    def test_openai_provider_includes_prompts_as_system_message(self):
+        config = LLMConfig(
+            base_url="http://localhost:1234/v1",
+            model="test",
+        )
+        provider = create_provider(
+            "openai_compatible",
+            config,
+            system_prompt="system rules",
+            response_format="format rules",
+        )
+
+        response_body = json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "text": "ok",
+                                    "emotion": "neutral",
+                                    "motion": "nod",
+                                    "speak_style": "normal",
+                                    "interruptible": True,
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        ).encode("utf-8")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return response_body
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()) as urlopen:
+            provider.generate("hello", [])
+
+        request = urlopen.call_args[0][0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["messages"][0]["role"], "system")
+        self.assertIn("system rules", payload["messages"][0]["content"])
+        self.assertIn("format rules", payload["messages"][0]["content"])
+
     def test_error_message_does_not_expose_secret_values(self):
         config = LLMConfig(
             base_url="http://localhost:1234/v1",

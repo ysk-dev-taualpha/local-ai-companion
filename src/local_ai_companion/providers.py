@@ -44,8 +44,10 @@ class MockLLMProvider(LLMProvider):
 class OpenAICompatibleProvider(LLMProvider):
     name = "openai_compatible"
 
-    def __init__(self, config):
+    def __init__(self, config, system_prompt="", response_format=""):
         self._config = config
+        self._system_prompt = system_prompt
+        self._response_format = response_format
 
     def generate(self, user_text, history):
         self._validate_config()
@@ -114,6 +116,9 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def _build_messages(self, user_text, history):
         messages = []
+        system_content = self._combined_system_prompt()
+        if system_content:
+            messages.append({"role": "system", "content": system_content})
         for turn in history:
             if turn.get("user_text"):
                 messages.append({"role": "user", "content": turn["user_text"]})
@@ -123,6 +128,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 messages.append({"role": "assistant", "content": assistant_text})
         messages.append({"role": "user", "content": user_text})
         return messages
+
+    def _combined_system_prompt(self):
+        parts = []
+        if self._system_prompt:
+            parts.append(self._system_prompt)
+        if self._response_format:
+            parts.append(self._response_format)
+        return "\n\n".join(parts)
 
     def _extract_content(self, body):
         try:
@@ -135,11 +148,15 @@ class OpenAICompatibleProvider(LLMProvider):
             ) from exc
 
 
-def create_provider(name, config=None):
+def create_provider(name, config=None, system_prompt="", response_format=""):
     if name == "mock":
         return MockLLMProvider()
     if name == "openai_compatible":
         if config is None:
             return OpenAICompatibleProvider(config=None)
-        return OpenAICompatibleProvider(config)
+        return OpenAICompatibleProvider(
+            config,
+            system_prompt=system_prompt,
+            response_format=response_format,
+        )
     raise ValueError("unsupported llm provider: {}".format(name))
