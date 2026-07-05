@@ -40,6 +40,10 @@ Primary responsibilities:
 
 Go Runtimeはアシスタント全体の神経系として振る舞う。LLMの知能そのものよりも、イベント制御、安全管理、サービス間接続を担当する。
 
+Gemma 4 / Ollama の tool calling を利用する場合も、tool の実行主体は Go Runtime とする。LLM は tool call を提案し、Go Runtime が ToolRegistry / ToolPolicy / ToolExecutor を通じて実行、制限、監査ログ、Unity への制御イベント配送を担当する。
+
+Agent tool calling の詳細設計は [agent_tool_calling.md](agent_tool_calling.md) を参照する。
+
 ### Python AI Service
 
 Python AI ServiceはLLM、STT、TTS、RAG、ML系処理を担当する。
@@ -111,32 +115,3 @@ Operations affected by cancellation:
 - TTS playback
 - response streaming
 - character speech events
-
-## v0.4: TTS Integration
-
-v0.4 では TTS（Text-to-Speech）連携を導入。Python AI Service が生成した応答テキストを音声に変換し、WebSocket 経由で Unity クライアントに配信する。
-
-### v0.4 Data Flow
-
-```text
-User
-  ↓ voice / text
-Unity
-  ↓ WebSocket: type:"text"
-Go Runtime
-  ↓ HTTP request
-Python AI Service
-  ↓ LLM response JSON
-Go Runtime
-  ↓ VOICEVOX TTS (audio_query → synthesis)
-  ↓ WebSocket: type:"ai_response" (audio フィールドに base64 WAV)
-Unity Character
-  ↓ text display → audio playback
-```
-
-### Key additions in v0.4
-
-- WebSocket `ai_response` に `audio` フィールド（base64 WAV）を追加（`docs/api_contracts.md` 参照）
-- Go Runtime が VOICEVOX を直接呼び出し（`internal/tts/` パッケージ）
-- `config.json` の `tts` セクションで有効化・話者設定
-- TTS 失敗時はログ出力のみで AI 応答テキストは通常通り返す

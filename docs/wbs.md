@@ -140,3 +140,14 @@ Later phases are intentionally coarse. They should be refined when the preceding
 - Add idle state
 - Add subtitle display
 - Add external control API
+
+## Later: Agent Tool Calling
+
+- Add Go Runtime AgentLoop for Ollama `/api/chat`
+- Add ToolRegistry for tool schemas and executors
+- Add ToolPolicy for allowlist, loop limit, and audit decisions
+- Add ToolExecutor boundary with timeout and cancellation
+- Add initial safe tools: `web_search`, `web_fetch`, `audio_control`, `set_state`
+- Add Ollama Web Search provider
+- Add structured tool call audit logs
+- Add tests for tool call parsing, policy denial, executor errors, and loop limit
