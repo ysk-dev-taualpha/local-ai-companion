@@ -122,6 +122,7 @@ namespace AICompanion
 
         private void Start()
         {
+            EnsureSceneCamera();
             EnsureUIReferences();
 
             // タイトル
@@ -692,6 +693,20 @@ namespace AICompanion
             scaler.matchWidthOrHeight = 0.5f;
 
             return canvas;
+        }
+
+        private static void EnsureSceneCamera()
+        {
+            if (Camera.main != null || FindObjectOfType<Camera>() != null)
+                return;
+
+            var cameraObject = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener));
+            cameraObject.tag = "MainCamera";
+            cameraObject.transform.position = new Vector3(0f, 0f, -10f);
+
+            var camera = cameraObject.GetComponent<Camera>();
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.02f, 0.02f, 0.02f, 1f);
         }
 
         private static RectTransform CreateRect(string name, Transform parent)
