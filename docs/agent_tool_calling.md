@@ -10,10 +10,13 @@ Go Runtime を agent host として拡張し、Gemma 4 / Ollama が選択した 
 
 LLM は tool を直接実行しない。LLM は必要な tool call を提案し、Go Runtime が権限、状態、ログ、実行回数を管理したうえで tool を実行する。
 
+Go Runtime は tool calling 以前の前提情報として、現在日時、timezone、locale などの runtime context を LLM 呼び出し時に注入する。現在日時のように外部検索なしで Runtime が確定できる情報は tool に過剰依存せず、system message 側で毎回提供する。
+
 ```text
 Unity
   -> user text / voice event
 Go Runtime
+  -> inject runtime context
   -> Ollama / Gemma 4 chat request with tools
       <- assistant message with tool_calls
   -> ToolPolicy check
@@ -35,11 +38,36 @@ Ollama `/api/chat` との往復を管理する。
 Responsibilities:
 
 - user message と conversation history を組み立てる
+- runtime context を system message に注入する
 - ToolRegistry から tool schema を取得して Ollama に渡す
 - `tool_calls` を検出する
 - tool result を `role: tool` として会話履歴に追加する
 - 最大 loop 回数を超えた場合は安全に停止する
 - 最終応答を既存の `ai_response` として返す
+
+### RuntimeContext
+
+LLM 呼び出しごとに注入する実行時コンテキストを生成する。
+
+Responsibilities:
+
+- current date / time / timezone を Runtime のシステム時刻から生成する
+- locale や user location など、回答方針に影響する安定情報を保持する
+- 相対日付、現在年、曜日に関する質問では Runtime の日時を authoritative とする指示を含める
+- secret や不要な環境情報を含めない
+
+Example system context:
+
+```text
+Current date: 2026-07-05
+Current time: 16:50:00
+Timezone: Asia/Tokyo
+Locale: ja-JP
+
+When answering questions about today, yesterday, tomorrow, current year,
+weekdays, schedules, or recentness, use this runtime date as authoritative.
+Use web_search only when external current information is required.
+```
 
 ### ToolRegistry
 
@@ -176,6 +204,7 @@ Runtime は既存 StateMachine の有効遷移だけを許可する。
 
 初期実装では以下を必須とする。
 
+- current date / time / timezone は LLM 呼び出しごとに runtime context として注入する
 - tool loop の最大回数を設定する
 - request timeout と context cancellation を全 tool に伝播する
 - tool call と result の audit log を残す

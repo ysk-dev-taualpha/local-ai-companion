@@ -144,6 +144,7 @@ Later phases are intentionally coarse. They should be refined when the preceding
 ## Later: Agent Tool Calling
 
 - Add Go Runtime AgentLoop for Ollama `/api/chat`
+- Add RuntimeContext injection for current date, time, timezone, and locale
 - Add ToolRegistry for tool schemas and executors
 - Add ToolPolicy for allowlist, loop limit, and audit decisions
 - Add ToolExecutor boundary with timeout and cancellation
