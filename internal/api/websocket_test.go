@@ -52,7 +52,7 @@ func newTestHub(t *testing.T) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, nil, state.New(nil), 5000, nil, nil)
+	return NewWebSocketHub(mock, nil, state.New(nil), 5000, nil, nil, nil)
 }
 
 func TestHandleWS_SendReceive(t *testing.T) {
@@ -465,7 +465,7 @@ func testCheckOriginHub(t *testing.T, allowedOrigins []string) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, nil, state.New(nil), 5000, allowedOrigins, nil)
+	return NewWebSocketHub(mock, nil, state.New(nil), 5000, nil, nil, nil)
 }
 
 func TestHandleWS_CheckOrigin_AllowedOrigin(t *testing.T) {
@@ -519,4 +519,41 @@ func TestHandleWS_CheckOrigin_DefaultRejectExternal(t *testing.T) {
 	if err == nil {
 		t.Error("expected connection to be rejected for external origin with default config")
 	}
+}
+
+// ─── Audio Chunk Handling ───
+
+func TestHandleWS_AudioChunkRejectedDuringSpeaking(t *testing.T) {
+	hub := newTestHub(t)
+	hub.stateMachine.Transition(state.LISTENING)
+	hub.stateMachine.Transition(state.THINKING)
+	hub.stateMachine.Transition(state.SPEAKING)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+	conn := wsClient(t, srv.URL)
+	if err := conn.WriteMessage(websocket.BinaryMessage, make([]byte, 10)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil { t.Fatalf("read: %v", err) }
+	var result WSAudioChunkResult
+	json.Unmarshal(respBytes, &result)
+	if result.Type != "audio_chunk_rejected" { t.Errorf("type: %q", result.Type) }
+	if result.Reason != "speaking" { t.Errorf("reason: %q", result.Reason) }
+}
+
+func TestHandleWS_AudioChunkAcceptedDuringIdle(t *testing.T) {
+	hub := newTestHub(t)
+	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+	defer srv.Close()
+	conn := wsClient(t, srv.URL)
+	if err := conn.WriteMessage(websocket.BinaryMessage, make([]byte, 10)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, respBytes, err := conn.ReadMessage()
+	if err != nil { t.Fatalf("read: %v", err) }
+	var result WSAudioChunkResult
+	json.Unmarshal(respBytes, &result)
+	if result.Type != "audio_chunk_received" { t.Errorf("type: %q", result.Type) }
+	if result.Status != "ok" { t.Errorf("status: %q", result.Status) }
 }

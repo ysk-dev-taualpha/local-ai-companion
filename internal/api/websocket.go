@@ -68,30 +68,46 @@ type WSStateNotification struct {
 	State string `json:"state"`
 }
 
+type WSAudioChunkResult struct {
+	Type    string `json:"type"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	Status  string `json:"status,omitempty"`
+}
+
+const (
+	ErrCodeSTTTimeout     = "stt_timeout"
+	ErrCodeSTTEmpty       = "stt_empty"
+	ErrCodeSTTUnavailable = "stt_unavailable"
+	ErrCodeAudioRejected  = "audio_rejected"
+)
+
 type wsConnState struct {
 	writeMu sync.Mutex
 }
 
 type WebSocketHub struct {
-	mu               sync.RWMutex
-	stateMu          sync.Mutex
-	conns            map[*websocket.Conn]*wsConnState
-	pythonClient     PythonClient
-	ttsClient        tts.TTSClient
-	stateMachine     *state.StateMachine
-	agentLoop        *agent.Loop
-	requestTimeoutMs int
-	upgrader         websocket.Upgrader
+	mu                sync.RWMutex
+	stateMu           sync.Mutex
+	conns             map[*websocket.Conn]*wsConnState
+	pythonClient      PythonClient
+	ttsClient         tts.TTSClient
+	stateMachine      *state.StateMachine
+	agentLoop         *agent.Loop
+	audioChunkHandler AudioChunkHandler
+	requestTimeoutMs  int
+	upgrader          websocket.Upgrader
 }
 
-func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop) *WebSocketHub {
+func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop, audioChunkHandler AudioChunkHandler) *WebSocketHub {
 	return &WebSocketHub{
-		conns:            make(map[*websocket.Conn]*wsConnState),
-		pythonClient:     pythonClient,
-		ttsClient:        ttsClient,
-		stateMachine:     stateMachine,
-		agentLoop:        agentLoop,
-		requestTimeoutMs: requestTimeoutMs,
+		conns:             make(map[*websocket.Conn]*wsConnState),
+		pythonClient:      pythonClient,
+		ttsClient:         ttsClient,
+		stateMachine:      stateMachine,
+		agentLoop:         agentLoop,
+		audioChunkHandler: audioChunkHandler,
+		requestTimeoutMs:  requestTimeoutMs,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: buildCheckOrigin(allowedOrigins),
 		},
@@ -103,29 +119,28 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-
 	h.mu.Lock()
 	h.conns[conn] = &wsConnState{}
 	h.mu.Unlock()
-
 	defer func() {
 		h.mu.Lock()
 		delete(h.conns, conn)
 		h.mu.Unlock()
 		conn.Close()
 	}()
-
 	for {
-		_, msgBytes, err := conn.ReadMessage()
+		msgType, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			break
 		}
-
+		if msgType == websocket.BinaryMessage {
+			h.handleAudioChunk(conn, msgBytes)
+			continue
+		}
 		var msg WSMessage
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			continue
 		}
-
 		switch msg.Type {
 		case "text":
 			if h.agentLoop != nil {
@@ -139,16 +154,38 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *WebSocketHub) handleAudioChunk(conn *websocket.Conn, rawData []byte) {
+	if h.stateMachine.IsSpeaking() {
+		log.Printf("websocket: audio_chunk discarded during SPEAKING (%d bytes)", len(rawData))
+		h.writeJSON(conn, WSAudioChunkResult{
+			Type:    "audio_chunk_rejected",
+			Reason:  "speaking",
+			Message: "SPEAKING 中は音声入力を受け付けません",
+		})
+		return
+	}
+	chunk, err := parseAudioChunk(rawData)
+	if err != nil {
+		log.Printf("websocket: failed to parse audio_chunk: %v", err)
+		return
+	}
+	if h.audioChunkHandler != nil {
+		h.audioChunkHandler.HandleAudioChunk(chunk)
+	}
+	h.writeJSON(conn, WSAudioChunkResult{
+		Type:   "audio_chunk_received",
+		Status: "ok",
+	})
+}
+
 func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessage) {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
-
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
 		return
 	}
 	h.broadcastState("LISTENING")
-
 	if err := h.stateMachine.Transition(state.THINKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -156,15 +193,12 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 		return
 	}
 	h.broadcastState("THINKING")
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
 	defer cancel()
-
 	requestID := msg.RequestID
 	if requestID == "" {
 		requestID = newRequestID()
 	}
-
 	responseText, err := h.agentLoop.Run(ctx, msg.Payload, requestID)
 	if err != nil {
 		h.sendError(conn, requestID, err.Error())
@@ -172,7 +206,6 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 		h.stateMachine.Reset()
 		return
 	}
-
 	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -180,13 +213,11 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 		return
 	}
 	h.broadcastState("SPEAKING")
-
 	aiResp := WSAIResponse{
 		Type:      "ai_response",
 		RequestID: requestID,
 		Text:      responseText,
 	}
-
 	if h.ttsClient != nil && responseText != "" {
 		audioData, ttsErr := h.ttsClient.Speak(responseText)
 		if ttsErr != nil {
@@ -198,7 +229,6 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	if err := h.writeJSON(conn, aiResp); err != nil {
 		log.Printf("websocket: failed to write ai_response: %v", err)
 	}
-
 	if err := h.stateMachine.Transition(state.IDLE); err != nil {
 		log.Printf("websocket: failed to transition to IDLE: %v", err)
 		h.stateMachine.Reset()
@@ -209,13 +239,11 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
-
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
 		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
 		return
 	}
 	h.broadcastState("LISTENING")
-
 	if err := h.stateMachine.Transition(state.THINKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -223,10 +251,8 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		return
 	}
 	h.broadcastState("THINKING")
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
 	defer cancel()
-
 	req := client.ConversationRequest{
 		Message:   msg.Payload,
 		RequestID: msg.RequestID,
@@ -238,7 +264,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		h.stateMachine.Reset()
 		return
 	}
-
 	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
@@ -246,14 +271,12 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		return
 	}
 	h.broadcastState("SPEAKING")
-
 	aiResp := WSAIResponse{
 		Type:           "ai_response",
 		RequestID:      resp.RequestID,
 		ConversationID: resp.ConversationID,
 		Assistant:      &resp.Assistant,
 	}
-
 	if h.ttsClient != nil && resp.Assistant.Text != "" {
 		audioData, ttsErr := h.ttsClient.Speak(resp.Assistant.Text)
 		if ttsErr != nil {
@@ -265,7 +288,6 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 	if err := h.writeJSON(conn, aiResp); err != nil {
 		log.Printf("websocket: failed to write ai_response: %v", err)
 	}
-
 	if err := h.stateMachine.Transition(state.IDLE); err != nil {
 		log.Printf("websocket: failed to transition to IDLE: %v", err)
 		h.stateMachine.Reset()
@@ -308,7 +330,6 @@ func (h *WebSocketHub) writeJSON(conn *websocket.Conn, v interface{}) error {
 	}
 	cs.writeMu.Lock()
 	defer cs.writeMu.Unlock()
-
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -321,14 +342,12 @@ func (h *WebSocketHub) Broadcast(msg interface{}) error {
 	if err != nil {
 		return err
 	}
-
 	h.mu.RLock()
 	conns := make([]*websocket.Conn, 0, len(h.conns))
 	for conn := range h.conns {
 		conns = append(conns, conn)
 	}
 	h.mu.RUnlock()
-
 	for _, conn := range conns {
 		h.mu.RLock()
 		cs := h.conns[conn]

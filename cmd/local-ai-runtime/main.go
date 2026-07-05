@@ -70,7 +70,7 @@ func main() {
 			cfg.Ollama.Model, cfg.Agent.MaxToolLoops, cfg.Agent.AllowedTools)
 	}
 
-	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop)
+	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop, nil)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)

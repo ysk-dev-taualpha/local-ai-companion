@@ -394,3 +394,16 @@ func TestConcurrentTransitions(t *testing.T) {
 		t.Errorf("invalid final state after concurrent access: %d", final)
 	}
 }
+
+func TestIsSpeaking(t *testing.T) {
+	sm := New(nil)
+	if sm.IsSpeaking() { t.Error("expected false for IDLE") }
+	sm.Transition(LISTENING)
+	if sm.IsSpeaking() { t.Error("expected false for LISTENING") }
+	sm.Transition(THINKING)
+	if sm.IsSpeaking() { t.Error("expected false for THINKING") }
+	sm.Transition(SPEAKING)
+	if !sm.IsSpeaking() { t.Error("expected true for SPEAKING") }
+	sm.Transition(IDLE)
+	if sm.IsSpeaking() { t.Error("expected false after IDLE") }
+}

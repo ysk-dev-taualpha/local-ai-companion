@@ -90,6 +90,13 @@ func (sm *StateMachine) Transition(to State) error {
 	return nil
 }
 
+
+func (sm *StateMachine) IsSpeaking() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.current == SPEAKING
+}
+
 // Reset forces the state machine back to IDLE regardless of current state.
 // The callback is invoked if the state actually changes.
 func (sm *StateMachine) Reset() {
