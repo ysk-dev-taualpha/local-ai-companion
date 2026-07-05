@@ -75,6 +75,16 @@ AI応答:
 
 `data`, `audio`, `audio_base64` のいずれかに Base64 エンコードされた WAV を入れると再生します。PCM 8/16/24/32bit と IEEE float 32bit WAV をサポートします。
 
+音声制御:
+
+```json
+{"type": "audio_control", "action": "stop"}
+```
+
+```json
+{"type": "audio_control", "action": "clear_queue"}
+```
+
 エラー:
 
 ```json
@@ -88,6 +98,8 @@ AI応答:
 - 複数の `audio` メッセージはキューに入り、順番に再生されます。
 - `state_change: SPEAKING` で再生キューを開始します。
 - `state_change: IDLE` で現在の再生とキューを停止します。
+- `audio_control: stop` で現在の再生を停止し、待機中キューも破棄します。
+- `audio_control: clear_queue` で現在の再生は続けたまま、待機中キューだけ破棄します。
 
 ## 確認手順
 

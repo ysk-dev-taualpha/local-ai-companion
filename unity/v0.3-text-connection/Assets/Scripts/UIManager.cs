@@ -76,6 +76,14 @@ namespace AICompanion
         public string mime_type;
     }
 
+    [Serializable]
+    public class AudioControlJson
+    {
+        public string type;
+        public string request_id;
+        public string action;
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("UI References")]
@@ -308,6 +316,8 @@ namespace AICompanion
                     return;
                 if (TryHandleAudioMessage(json))
                     return;
+                if (TryHandleAudioControl(json))
+                    return;
                 if (TryHandleAiResponse(json))
                     return;
                 if (TryHandleError(json))
@@ -359,6 +369,36 @@ namespace AICompanion
             catch (Exception ex)
             {
                 AppendResponse($"<color=#ff6666>[Audio Error] {ex.Message}</color>");
+                return true;
+            }
+        }
+
+        private bool TryHandleAudioControl(string json)
+        {
+            try
+            {
+                var control = JsonUtility.FromJson<AudioControlJson>(json);
+                if (control == null || control.type != "audio_control")
+                    return false;
+
+                switch (control.action)
+                {
+                    case "stop":
+                        StopAudioPlayback();
+                        AppendResponse("<color=#ffcc66>[Audio] stopped</color>");
+                        return true;
+                    case "clear_queue":
+                        ClearAudioQueue();
+                        AppendResponse("<color=#ffcc66>[Audio] queue cleared</color>");
+                        return true;
+                    default:
+                        AppendResponse($"<color=#ff6666>[Audio Control Error] unsupported action: {control.action}</color>");
+                        return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendResponse($"<color=#ff6666>[Audio Control Error] {ex.Message}</color>");
                 return true;
             }
         }
