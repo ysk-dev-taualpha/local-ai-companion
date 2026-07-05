@@ -41,6 +41,22 @@ func TestLoadDefaultsTTS(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsAgentRuntimeContext(t *testing.T) {
+	cfg, _ := Load("")
+	if cfg.Agent.Timezone != "Asia/Tokyo" {
+		t.Errorf("expected default agent timezone Asia/Tokyo, got %s", cfg.Agent.Timezone)
+	}
+	if cfg.Agent.Locale != "ja-JP" {
+		t.Errorf("expected default agent locale ja-JP, got %s", cfg.Agent.Locale)
+	}
+	if cfg.Agent.WebSearchURL != "https://ollama.com" {
+		t.Errorf("expected default web search URL https://ollama.com, got %s", cfg.Agent.WebSearchURL)
+	}
+	if cfg.Agent.WebSearchAPIKeyEnv != "OLLAMA_API_KEY" {
+		t.Errorf("expected default web search API key env OLLAMA_API_KEY, got %s", cfg.Agent.WebSearchAPIKeyEnv)
+	}
+}
+
 func TestLoadFromFile(t *testing.T) {
 	data := `{
 		"runtime":{"listen_addr":"0.0.0.0:9090","request_timeout_ms":5000},

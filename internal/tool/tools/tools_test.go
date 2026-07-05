@@ -6,7 +6,7 @@ import (
 )
 
 func TestWebSearch_MissingQuery(t *testing.T) {
-	ws := NewWebSearch("")
+	ws := NewWebSearch("", "")
 	_, err := ws.Execute(json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error for missing query")
@@ -14,7 +14,7 @@ func TestWebSearch_MissingQuery(t *testing.T) {
 }
 
 func TestWebSearch_MalformedArgs(t *testing.T) {
-	ws := NewWebSearch("")
+	ws := NewWebSearch("", "")
 	_, err := ws.Execute(json.RawMessage(`{invalid}`))
 	if err == nil {
 		t.Fatal("expected error for malformed args")
@@ -72,7 +72,7 @@ func TestAudioControl_ValidActions(t *testing.T) {
 	called := ""
 	cb := func(action string) (string, error) { called = action; return "done: " + action, nil }
 	ac := NewAudioControl(cb)
-	for _, a := range []string{"mute", "unmute", "volume_up", "volume_down", "pause", "resume"} {
+	for _, a := range []string{"stop", "clear_queue"} {
 		called = ""
 		body, _ := json.Marshal(map[string]string{"action": a})
 		result, err := ac.Execute(body)
@@ -90,11 +90,11 @@ func TestAudioControl_ValidActions(t *testing.T) {
 
 func TestAudioControl_NoCallback(t *testing.T) {
 	ac := NewAudioControl(nil)
-	result, err := ac.Execute(json.RawMessage(`{"action":"mute"}`))
+	result, err := ac.Execute(json.RawMessage(`{"action":"stop"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "audio mute acknowledged (no-op)" {
+	if result != "audio stop acknowledged (no-op)" {
 		t.Errorf("expected no-op message, got %s", result)
 	}
 }
@@ -118,7 +118,7 @@ func TestSetState_InvalidState(t *testing.T) {
 func TestSetState_ValidStates(t *testing.T) {
 	lastState := ""
 	ss := NewSetState(func(state string) error { lastState = state; return nil })
-	for _, s := range []string{"idle", "listening", "thinking", "speaking", "sleeping"} {
+	for _, s := range []string{"IDLE", "LISTENING", "THINKING", "SPEAKING"} {
 		lastState = ""
 		body, _ := json.Marshal(map[string]string{"state": s})
 		result, err := ss.Execute(body)
@@ -136,12 +136,27 @@ func TestSetState_ValidStates(t *testing.T) {
 
 func TestSetState_NoCallback(t *testing.T) {
 	ss := NewSetState(nil)
-	result, err := ss.Execute(json.RawMessage(`{"state":"idle"}`))
+	result, err := ss.Execute(json.RawMessage(`{"state":"IDLE"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "state set to idle" {
+	if result != "state set to IDLE" {
 		t.Errorf("expected 'state set to idle', got %s", result)
+	}
+}
+
+func TestSetState_NormalizesLowercase(t *testing.T) {
+	lastState := ""
+	ss := NewSetState(func(state string) error { lastState = state; return nil })
+	result, err := ss.Execute(json.RawMessage(`{"state":"thinking"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lastState != "THINKING" {
+		t.Fatalf("expected normalized state THINKING, got %s", lastState)
+	}
+	if result != "state set to THINKING" {
+		t.Fatalf("unexpected result: %s", result)
 	}
 }
 

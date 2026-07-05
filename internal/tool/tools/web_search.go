@@ -12,7 +12,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 )
 
-func NewWebSearch(ollamaBaseURL string) tool.Executor {
+func NewWebSearch(searchBaseURL, apiKey string) tool.Executor {
 	return tool.ExecutorFunc(func(args json.RawMessage) (string, error) {
 		var params struct {
 			Query      string `json:"query"`
@@ -27,21 +27,22 @@ func NewWebSearch(ollamaBaseURL string) tool.Executor {
 		if params.MaxResults <= 0 {
 			params.MaxResults = 3
 		}
-		if ollamaBaseURL != "" {
-			return searchViaOllama(ollamaBaseURL, params.Query, params.MaxResults)
+		if searchBaseURL != "" && apiKey != "" {
+			return searchViaOllama(searchBaseURL, apiKey, params.Query, params.MaxResults)
 		}
 		return searchViaDuckDuckGo(params.Query, params.MaxResults)
 	})
 }
 
-func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
-	reqBody := fmt.Sprintf(`{"query":%q}`, query)
-	endpoint := strings.TrimRight(baseURL, "/") + "/api/search"
+func searchViaOllama(baseURL, apiKey, query string, maxResults int) (string, error) {
+	reqBody := fmt.Sprintf(`{"query":%q,"max_results":%d}`, query, maxResults)
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/web_search"
 	req, err := http.NewRequest("POST", endpoint, strings.NewReader(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("web_search: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -54,9 +55,9 @@ func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
 	}
 	var result struct {
 		Results []struct {
-			Title       string `json:"title"`
-			URL         string `json:"url"`
-			Description string `json:"description"`
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -68,7 +69,7 @@ func searchViaOllama(baseURL, query string, maxResults int) (string, error) {
 		if count >= maxResults {
 			break
 		}
-		fmt.Fprintf(&out, "%d. %s\n   URL: %s\n   %s\n\n", count+1, r.Title, r.URL, r.Description)
+		fmt.Fprintf(&out, "%d. %s\n   URL: %s\n   %s\n\n", count+1, r.Title, r.URL, r.Content)
 		count++
 	}
 	if out.Len() == 0 {

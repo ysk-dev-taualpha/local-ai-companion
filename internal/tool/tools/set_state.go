@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 )
@@ -20,12 +21,12 @@ func NewSetState(setter StateSetter) tool.Executor {
 		if params.State == "" {
 			return "", fmt.Errorf("set_state: state is required")
 		}
+		params.State = strings.ToUpper(params.State)
 		validStates := map[string]bool{
-			"idle": true, "listening": true, "thinking": true,
-			"speaking": true, "sleeping": true,
+			"IDLE": true, "LISTENING": true, "THINKING": true, "SPEAKING": true,
 		}
 		if !validStates[params.State] {
-			return "", fmt.Errorf("set_state: invalid state %q (allowed: idle, listening, thinking, speaking, sleeping)", params.State)
+			return "", fmt.Errorf("set_state: invalid state %q (allowed: IDLE, LISTENING, THINKING, SPEAKING)", params.State)
 		}
 		if setter != nil {
 			if err := setter(params.State); err != nil {

@@ -59,6 +59,9 @@ User Message
 AgentLoop.Run(ctx, userMessage)
      │
      ▼
+RuntimeContext を system message に注入
+     │
+     ▼
 OllamaClient.Chat(messages, tools)
      │
      ├── tool_calls なし → 最終応答を返す
@@ -90,16 +93,17 @@ OllamaClient.Chat(messages, tools)
 | malformed arguments | JSON パース失敗時は `PolicyMalformed`、構造化エラーを LLM に返す |
 | secret 保護 | tool result / log に secret を含めない（tool 実装の責務） |
 | 危険 tool 除外 | `write_file`, `run_command`, `git push` 等は初期実装に含めない |
-| context propagation | `ctx` を tool Execute に伝播、timeout/cancel で停止 |
+| runtime context | current date / time / timezone / locale を LLM 呼び出しごとに注入 |
 
 ## 初期 tool
 
 ### web_search
 
-- **provider**: DuckDuckGo Instant Answer API（API キー不要）
+- **provider**: Ollama 公式 Web Search API（`agent.web_search_url` + `OLLAMA_API_KEY`）
+- **fallback**: API key 未設定時は DuckDuckGo HTML 検索
 - **インターフェース**: `WebSearchProvider`（将来 SearxNG / Brave / Tavily に差し替え可）
-- **パラメータ**: `query` (必須), `max_results` (1-10, デフォルト 5)
-- **戻り値**: `{"results": [...], "query": "..."}`
+- **パラメータ**: `query` (必須), `max_results` (デフォルト 3)
+- **戻り値**: 検索結果の番号付きテキスト
 
 ### web_fetch
 
@@ -111,33 +115,41 @@ OllamaClient.Chat(messages, tools)
 ### audio_control
 
 - **説明**: Unity クライアントへの音声制御指示
-- **パラメータ**: `action` (必須, enum: speak/stop/pause/resume)
+- **パラメータ**: `action` (必須, enum: stop/clear_queue)
 - **戻り値**: `{"action": "...", "message": "..."}`
 
 ### set_state
 
 - **説明**: コンパニオンの状態設定
-- **パラメータ**: `state` (必須, 文字列)
+- **パラメータ**: `state` (必須, enum: IDLE/LISTENING/THINKING/SPEAKING)
 - **戻り値**: `{"previous": "...", "current": "..."}`
 
 ## 設定
 
 ```json
 {
+  "ollama": {
+    "enabled": false,
+    "base_url": "http://192.168.12.107:11434",
+    "model": "g4v100",
+    "timeout_ms": 60000
+  },
   "agent": {
     "enabled": false,
-    "ollama_url": "http://192.168.12.107:11434",
-    "ollama_model": "g4v100",
-    "max_iter": 5,
-    "system_prompt": "",
-    "allowed_tools": [],
-    "audit_size": 1000
+    "max_tool_loops": 5,
+    "system_prompt": "あなたは local-ai-companion です。日本語で応答し、必要に応じてツールを使用してください。",
+    "allowed_tools": ["web_search", "web_fetch", "audio_control", "set_state"],
+    "timezone": "Asia/Tokyo",
+    "locale": "ja-JP",
+    "web_search_url": "https://ollama.com",
+    "web_search_api_key_env": "OLLAMA_API_KEY"
   }
 }
 ```
 
-- `allowed_tools` が空の場合は全 tool 許可（allowlist 無効）
-- `audit_size` は監査ログの最大エントリ数（0 = 無制限）
+- `timezone` / `locale` は RuntimeContext として LLM 呼び出しごとに system message へ注入する。
+- `web_search_api_key_env` は環境変数名であり、API key 値そのものを config に書かない。
+- `allowed_tools` に列挙された tool のみ実行する。
 
 ## 監査ログ
 

@@ -15,6 +15,8 @@ type Config struct {
 	Model         string
 	OllamaTimeout time.Duration
 	SystemPrompt  string
+	Timezone      string
+	Locale        string
 }
 
 type Loop struct {
@@ -46,11 +48,8 @@ func (l *Loop) Run(ctx context.Context, message string, requestID string) (strin
 	}
 
 	messages := []Message{
+		{Role: "system", Content: BuildSystemPrompt(l.config.SystemPrompt, l.config.Timezone, l.config.Locale, time.Now())},
 		{Role: "user", Content: message},
-	}
-
-	if l.config.SystemPrompt != "" {
-		messages = append([]Message{{Role: "system", Content: l.config.SystemPrompt}}, messages...)
 	}
 
 	toolDefs := l.registry.Definitions()
