@@ -175,6 +175,8 @@ curl -X POST http://127.0.0.1:8080/v1/conversation \
   -d '{"message":"こんにちは"}'
 ```
 
+`config.runtime.example.json` の `python_service.command` に起動コマンドを設定すると、Go Runtime が Python AI Service を子プロセスとして起動します。空文字の場合は従来どおり外部で起動済みの Python AI Service を利用します。
+
 ## Participants
 
 - Human developer: product direction and final acceptance

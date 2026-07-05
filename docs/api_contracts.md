@@ -228,6 +228,35 @@ ConversationCore.send() の戻り値:
 
 常に 200 を返す。実装箇所: `internal/api/handler.go` → `HandleHealth`
 
+## Go Runtime: Python Service 起動設定
+
+Go Runtime は `python_service.command` が空の場合、`python_service.base_url` で指定された外部 Python AI Service に接続する。
+`python_service.command` が指定された場合は Runtime 起動時に子プロセスとして Python AI Service を起動し、`base_url` に HTTP 到達できるまで待ってから Runtime を ready とする。
+
+```json
+{
+  "python_service": {
+    "base_url": "http://127.0.0.1:8090",
+    "command": "PYTHONPATH=./src python3 -m local_ai_companion --serve",
+    "ready_timeout_ms": 10000,
+    "shutdown_timeout_ms": 5000
+  }
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|----|:--:|------|
+| `base_url` | string | 任意 | Python AI Service の base URL。既定値は `http://127.0.0.1:8090` |
+| `command` | string | 任意 | 子プロセスとして起動する shell command。空文字の場合は起動管理しない |
+| `ready_timeout_ms` | number | 任意 | 起動後に `base_url` へ到達可能になるまで待つ最大時間。既定値は `10000` |
+| `shutdown_timeout_ms` | number | 任意 | Runtime shutdown 時に子プロセス停止を待つ最大時間。既定値は `5000` |
+
+実装箇所:
+
+- `internal/config/config.go` → `PythonServiceConfig`
+- `internal/pythonservice/service.go` → `Service`
+- `cmd/local-ai-runtime/main.go`
+
 ## Go Runtime: /ws — WebSocket
 
 **プロトコル:** WebSocket（`ws://` または `wss://`）。HTTP GET を WebSocket に Upgrade して利用する。

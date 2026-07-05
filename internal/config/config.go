@@ -18,7 +18,10 @@ type WebSocketConfig struct {
 }
 
 type PythonServiceConfig struct {
-	BaseURL string `json:"base_url"`
+	BaseURL           string `json:"base_url"`
+	Command           string `json:"command"`
+	ReadyTimeoutMs    int    `json:"ready_timeout_ms"`
+	ShutdownTimeoutMs int    `json:"shutdown_timeout_ms"`
 }
 
 type LoggingConfig struct {
@@ -39,7 +42,9 @@ func Load(path string) (*Config, error) {
 			RequestTimeoutMs: 30000,
 		},
 		PythonService: PythonServiceConfig{
-			BaseURL: "http://127.0.0.1:8090",
+			BaseURL:           "http://127.0.0.1:8090",
+			ReadyTimeoutMs:    10000,
+			ShutdownTimeoutMs: 5000,
 		},
 		Logging: LoggingConfig{
 			Level: "info",
