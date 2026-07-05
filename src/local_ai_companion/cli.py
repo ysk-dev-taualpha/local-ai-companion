@@ -2,7 +2,7 @@ import argparse
 import json
 import sys
 
-from .config import load_config
+from .config import build_prompts, load_config
 from .conversation import ConversationCore
 from .log_writer import JSONLLogWriter
 from .providers import create_provider
@@ -29,8 +29,18 @@ def _make_log_writer(config, log_dir_arg):
     return None
 
 
+def _make_provider(config):
+    system_prompt, response_format = build_prompts(config)
+    return create_provider(
+        config.llm.provider,
+        config.llm,
+        system_prompt=system_prompt,
+        response_format=response_format,
+    )
+
+
 def run_once(config, conversation_id, request_id, message, log_writer):
-    provider = create_provider(config.llm.provider, config.llm)
+    provider = _make_provider(config)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
@@ -48,7 +58,7 @@ def run_once(config, conversation_id, request_id, message, log_writer):
 
 
 def run_repl(config, conversation_id, log_writer):
-    provider = create_provider(config.llm.provider, config.llm)
+    provider = _make_provider(config)
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,

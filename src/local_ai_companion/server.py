@@ -1,7 +1,7 @@
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from .config import AppConfig, load_config
+from .config import AppConfig, build_prompts, load_config
 from .conversation import ConversationCore
 from .providers import create_provider
 
@@ -60,7 +60,13 @@ class ConversationHandler(BaseHTTPRequestHandler):
 
 
 def run_server(config: AppConfig, host="127.0.0.1", port=8090):
-    provider = create_provider(config.llm.provider, config.llm)
+    system_prompt, response_format = build_prompts(config)
+    provider = create_provider(
+        config.llm.provider,
+        config.llm,
+        system_prompt=system_prompt,
+        response_format=response_format,
+    )
     core = ConversationCore(
         provider=provider,
         max_history_turns=config.conversation.max_history_turns,
