@@ -64,6 +64,18 @@ namespace AICompanion
         public string error;
     }
 
+    [Serializable]
+    public class AudioMessageJson
+    {
+        public string type;
+        public string request_id;
+        public string data;
+        public string audio;
+        public string audio_base64;
+        public string format;
+        public string mime_type;
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("UI References")]
@@ -79,10 +91,16 @@ namespace AICompanion
         [SerializeField] private string _httpFallbackUrl = "http://192.168.12.112:8090/v1/conversation";
         [SerializeField] private int _maxResponseLines = 200;
 
+        [Header("Audio")]
+        [SerializeField] private AudioSource _audioSource;
+        [SerializeField] private int _maxAudioQueueSize = 8;
+
         private WebSocketClient _wsClient;
         private readonly List<string> _responseLines = new();
-        private string _currentState = "—";
+        private readonly Queue<AudioClip> _audioQueue = new();
+        private string _currentState = "UNKNOWN";
         private bool _httpFallbackMode;
+        private Coroutine _audioPlaybackCoroutine;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Bootstrap()
@@ -98,7 +116,6 @@ namespace AICompanion
         {
             EnsureUIReferences();
 
-            // タイトル
             if (_titleText != null)
                 _titleText.text = "AI Companion v0.3";
 
@@ -109,7 +126,6 @@ namespace AICompanion
             }
             else
             {
-                // WebSocket クライアント初期化
                 _wsClient = new WebSocketClient(_wsUrl);
                 _wsClient.OnConnected += HandleConnected;
                 _wsClient.OnDisconnected += HandleDisconnected;
@@ -117,17 +133,14 @@ namespace AICompanion
                 _wsClient.OnError += HandleError;
             }
 
-            // 送信ボタン
             if (_sendButton != null)
                 _sendButton.onClick.AddListener(OnSendClicked);
 
-            // Enter キーでも送信
             if (_inputField != null)
                 _inputField.onEndEdit.AddListener(OnInputEndEdit);
 
             if (_wsClient != null)
             {
-                // 自動接続
                 _ = _wsClient.ConnectAsync();
                 UpdateStatus("接続中...");
             }
@@ -137,19 +150,14 @@ namespace AICompanion
         {
             _ = _wsClient?.DisconnectAsync();
             _wsClient?.Dispose();
+            StopAudioPlayback();
         }
 
-        /// <summary>
-        /// 送信ボタン押下時の処理。
-        /// </summary>
         public void OnSendClicked()
         {
             SendMessage();
         }
 
-        /// <summary>
-        /// InputField で Enter キーが押された時の処理。
-        /// </summary>
         private void OnInputEndEdit(string text)
         {
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
@@ -165,10 +173,7 @@ namespace AICompanion
             var text = _inputField.text.Trim();
             if (string.IsNullOrEmpty(text)) return;
 
-            // 送信中は無効化
             SetSendingState(true);
-
-            // ユーザー入力を表示
             AppendResponse($"<color=#888888>You:</color> {text}");
 
             var requestId = Guid.NewGuid().ToString();
@@ -188,7 +193,6 @@ namespace AICompanion
                 await _wsClient.SendAsync(json);
             }
 
-            // 入力フィールドをクリア
             _inputField.text = "";
             _inputField.ActivateInputField();
         }
@@ -249,7 +253,6 @@ namespace AICompanion
             }
             catch
             {
-                // Fall through to raw display.
             }
 
             AppendResponse($"<color=#aaaaaa>{json}</color>");
@@ -299,84 +302,240 @@ namespace AICompanion
 
         private void HandleMessageReceived(string json)
         {
-            // メッセージタイプを判別して処理
             UnityMainThreadDispatcher.Enqueue(() =>
             {
-                try
-                {
-                    // state_change を試す
-                    var stateChange = JsonUtility.FromJson<StateChangeJson>(json);
-                    if (stateChange.type == "state_change")
-                    {
-                        _currentState = stateChange.state;
-                        UpdateStatus($"状態: {_currentState}");
-                        return;
-                    }
-                }
-                catch { /* 別タイプ */ }
-
-                try
-                {
-                    // ai_response を試す
-                    var aiResp = JsonUtility.FromJson<AiResponseJson>(json);
-                    if (aiResp.type == "ai_response" || aiResp.assistant != null)
-                    {
-                        if (!string.IsNullOrEmpty(aiResp.error))
-                        {
-                            AppendResponse($"<color=#ff6666>[AI Error] {aiResp.error}</color>");
-                        }
-                        else if (aiResp.assistant != null)
-                        {
-                            AppendResponse($"<color=#66ccff>AI:</color> {aiResp.assistant.text}");
-                        }
-                        SetSendingState(false);
-                        return;
-                    }
-                }
-                catch { /* 別タイプ */ }
-
-                try
-                {
-                    // error レスポンス（Python service error / timeout 等）
-                    var errResp = JsonUtility.FromJson<ErrorJson>(json);
-                    if (errResp.type == "error")
-                    {
-                        var errMsg = errResp.error ?? "Unknown error";
-                        AppendResponse($"<color=#ff6666>[Server Error] {errMsg}</color>");
-                        SetSendingState(false);
-                        return;
-                    }
-                }
-                catch { /* 別タイプ */ }
-
-                // それ以外は ack など — そのまま表示
-                try
-                {
-                    var msg = JsonUtility.FromJson<MessageJson>(json);
-                    if (msg.type != null && msg.type.EndsWith("_ack"))
-                    {
-                        Debug.Log($"[UI] Ack: {msg.type} payload={msg.payload}");
-                        AppendResponse($"<color=#aaaaaa>[Ack] {msg.type}</color>");
-                        return;
-                    }
-                }
-                catch
-                {
-                }
+                if (TryHandleStateChange(json))
+                    return;
+                if (TryHandleAudioMessage(json))
+                    return;
+                if (TryHandleAiResponse(json))
+                    return;
+                if (TryHandleError(json))
+                    return;
+                if (TryHandleAck(json))
+                    return;
 
                 AppendResponse($"<color=#aaaaaa>{json}</color>");
             });
         }
 
-        /// <summary>
-        /// 応答表示エリアにテキストを追記する。
-        /// 古い行は自動的に削除される。
-        /// </summary>
+        private bool TryHandleStateChange(string json)
+        {
+            try
+            {
+                var stateChange = JsonUtility.FromJson<StateChangeJson>(json);
+                if (stateChange == null || stateChange.type != "state_change")
+                    return false;
+
+                _currentState = stateChange.state;
+                UpdateStatus($"State: {_currentState}");
+                if (_currentState == "SPEAKING")
+                {
+                    EnsureAudioPlayback();
+                }
+                else if (_currentState == "IDLE")
+                {
+                    StopAudioPlayback();
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHandleAudioMessage(string json)
+        {
+            try
+            {
+                var audioResp = JsonUtility.FromJson<AudioMessageJson>(json);
+                if (audioResp == null || audioResp.type != "audio")
+                    return false;
+
+                HandleAudioMessage(audioResp);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendResponse($"<color=#ff6666>[Audio Error] {ex.Message}</color>");
+                return true;
+            }
+        }
+
+        private bool TryHandleAiResponse(string json)
+        {
+            try
+            {
+                var aiResp = JsonUtility.FromJson<AiResponseJson>(json);
+                if (aiResp == null || (aiResp.type != "ai_response" && aiResp.assistant == null))
+                    return false;
+
+                if (!string.IsNullOrEmpty(aiResp.error))
+                {
+                    AppendResponse($"<color=#ff6666>[AI Error] {aiResp.error}</color>");
+                }
+                else if (aiResp.assistant != null)
+                {
+                    AppendResponse($"<color=#66ccff>AI:</color> {aiResp.assistant.text}");
+                }
+                SetSendingState(false);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHandleError(string json)
+        {
+            try
+            {
+                var errResp = JsonUtility.FromJson<ErrorJson>(json);
+                if (errResp == null || errResp.type != "error")
+                    return false;
+
+                var errMsg = errResp.error ?? "Unknown error";
+                AppendResponse($"<color=#ff6666>[Server Error] {errMsg}</color>");
+                SetSendingState(false);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHandleAck(string json)
+        {
+            try
+            {
+                var msg = JsonUtility.FromJson<MessageJson>(json);
+                if (msg == null || msg.type == null || !msg.type.EndsWith("_ack"))
+                    return false;
+
+                Debug.Log($"[UI] Ack: {msg.type} payload={msg.payload}");
+                AppendResponse($"<color=#aaaaaa>[Ack] {msg.type}</color>");
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void HandleAudioMessage(AudioMessageJson audioResp)
+        {
+            var base64 = FirstNonEmpty(audioResp.data, audioResp.audio, audioResp.audio_base64);
+            if (string.IsNullOrEmpty(base64))
+            {
+                AppendResponse("<color=#ff6666>[Audio Error] missing base64 data</color>");
+                return;
+            }
+
+            try
+            {
+                var bytes = Convert.FromBase64String(base64);
+                var clip = WavAudioClip.Create(bytes, $"AICompanionAudio-{audioResp.request_id}");
+                EnqueueAudio(clip);
+                AppendResponse($"<color=#88ccff>[Audio] queued {clip.length:0.00}s</color>");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[UI] Audio decode failed: {ex.Message}");
+                AppendResponse($"<color=#ff6666>[Audio Error] {ex.Message}</color>");
+            }
+        }
+
+        private void EnqueueAudio(AudioClip clip)
+        {
+            while (_audioQueue.Count >= _maxAudioQueueSize)
+            {
+                var dropped = _audioQueue.Dequeue();
+                if (dropped != null)
+                    Destroy(dropped);
+            }
+
+            _audioQueue.Enqueue(clip);
+            EnsureAudioPlayback();
+        }
+
+        private void EnsureAudioPlayback()
+        {
+            if (_audioSource == null)
+                _audioSource = gameObject.AddComponent<AudioSource>();
+
+            if (_audioPlaybackCoroutine == null && _audioQueue.Count > 0)
+                _audioPlaybackCoroutine = StartCoroutine(PlayQueuedAudio());
+        }
+
+        private IEnumerator PlayQueuedAudio()
+        {
+            while (_audioQueue.Count > 0)
+            {
+                var clip = _audioQueue.Dequeue();
+                if (clip == null)
+                    continue;
+
+                _audioSource.clip = clip;
+                _audioSource.Play();
+                UpdateStatus("Audio playing");
+
+                while (_audioSource != null && _audioSource.isPlaying)
+                    yield return null;
+
+                Destroy(clip);
+            }
+
+            _audioPlaybackCoroutine = null;
+            if (_currentState != "SPEAKING")
+                UpdateStatus($"State: {_currentState}");
+        }
+
+        private void StopAudioPlayback()
+        {
+            if (_audioPlaybackCoroutine != null)
+            {
+                StopCoroutine(_audioPlaybackCoroutine);
+                _audioPlaybackCoroutine = null;
+            }
+
+            if (_audioSource != null)
+            {
+                _audioSource.Stop();
+                if (_audioSource.clip != null)
+                    Destroy(_audioSource.clip);
+                _audioSource.clip = null;
+            }
+
+            ClearAudioQueue();
+        }
+
+        private void ClearAudioQueue()
+        {
+            while (_audioQueue.Count > 0)
+            {
+                var clip = _audioQueue.Dequeue();
+                if (clip != null)
+                    Destroy(clip);
+            }
+        }
+
+        private static string FirstNonEmpty(params string[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrEmpty(value))
+                    return value;
+            }
+            return null;
+        }
+
         private void AppendResponse(string line)
         {
             _responseLines.Add(line);
 
-            // 行数制限
             while (_responseLines.Count > _maxResponseLines)
                 _responseLines.RemoveAt(0);
 
@@ -385,7 +544,6 @@ namespace AICompanion
                 _responseText.text = string.Join("\n", _responseLines);
             }
 
-            // 自動スクロール
             if (_scrollRect != null)
             {
                 Canvas.ForceUpdateCanvases();
@@ -531,6 +689,100 @@ namespace AICompanion
             rect.anchorMax = anchorMax;
             rect.offsetMin = offsetMin;
             rect.offsetMax = offsetMax;
+        }
+    }
+
+    internal static class WavAudioClip
+    {
+        public static AudioClip Create(byte[] wavBytes, string name)
+        {
+            if (wavBytes == null || wavBytes.Length < 44)
+                throw new ArgumentException("WAV data is too short");
+            if (ReadString(wavBytes, 0, 4) != "RIFF" || ReadString(wavBytes, 8, 4) != "WAVE")
+                throw new ArgumentException("Audio message must contain RIFF/WAVE data");
+
+            var offset = 12;
+            var audioFormat = 0;
+            var channels = 0;
+            var sampleRate = 0;
+            var bitsPerSample = 0;
+            var dataOffset = -1;
+            var dataSize = 0;
+
+            while (offset + 8 <= wavBytes.Length)
+            {
+                var chunkId = ReadString(wavBytes, offset, 4);
+                var chunkSize = BitConverter.ToInt32(wavBytes, offset + 4);
+                var chunkDataOffset = offset + 8;
+
+                if (chunkDataOffset + chunkSize > wavBytes.Length)
+                    throw new ArgumentException("WAV chunk extends past end of data");
+
+                if (chunkId == "fmt ")
+                {
+                    audioFormat = BitConverter.ToInt16(wavBytes, chunkDataOffset);
+                    channels = BitConverter.ToInt16(wavBytes, chunkDataOffset + 2);
+                    sampleRate = BitConverter.ToInt32(wavBytes, chunkDataOffset + 4);
+                    bitsPerSample = BitConverter.ToInt16(wavBytes, chunkDataOffset + 14);
+                }
+                else if (chunkId == "data")
+                {
+                    dataOffset = chunkDataOffset;
+                    dataSize = chunkSize;
+                }
+
+                offset = chunkDataOffset + chunkSize + (chunkSize % 2);
+            }
+
+            if (dataOffset < 0)
+                throw new ArgumentException("WAV data chunk was not found");
+            if (channels <= 0 || sampleRate <= 0 || bitsPerSample <= 0)
+                throw new ArgumentException("WAV format chunk is invalid");
+            if (audioFormat != 1 && audioFormat != 3)
+                throw new ArgumentException($"Unsupported WAV format: {audioFormat}");
+
+            var bytesPerSample = bitsPerSample / 8;
+            var sampleCount = dataSize / bytesPerSample;
+            var frameCount = sampleCount / channels;
+            var samples = new float[sampleCount];
+
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var sampleOffset = dataOffset + (i * bytesPerSample);
+                samples[i] = ReadSample(wavBytes, sampleOffset, bitsPerSample, audioFormat);
+            }
+
+            var clip = AudioClip.Create(string.IsNullOrEmpty(name) ? "AICompanionAudio" : name, frameCount, channels, sampleRate, false);
+            clip.SetData(samples, 0);
+            return clip;
+        }
+
+        private static float ReadSample(byte[] bytes, int offset, int bitsPerSample, int audioFormat)
+        {
+            if (audioFormat == 3 && bitsPerSample == 32)
+                return Mathf.Clamp(BitConverter.ToSingle(bytes, offset), -1f, 1f);
+
+            switch (bitsPerSample)
+            {
+                case 8:
+                    return (bytes[offset] - 128) / 128f;
+                case 16:
+                    return BitConverter.ToInt16(bytes, offset) / 32768f;
+                case 24:
+                    var value = bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+                    if ((value & 0x800000) != 0)
+                        value |= unchecked((int)0xff000000);
+                    return value / 8388608f;
+                case 32:
+                    return BitConverter.ToInt32(bytes, offset) / 2147483648f;
+                default:
+                    throw new ArgumentException($"Unsupported WAV bit depth: {bitsPerSample}");
+            }
+        }
+
+        private static string ReadString(byte[] bytes, int offset, int count)
+        {
+            return Encoding.ASCII.GetString(bytes, offset, count);
         }
     }
 
