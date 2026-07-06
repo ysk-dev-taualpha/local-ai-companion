@@ -79,17 +79,17 @@ uvicorn stt.faster_whisper_server:app `
 # ============================================================
 #
 # Steps:
-#   1. Win+R -> taskschd.msc
+#   1. Win+R → taskschd.msc
 #   2. [Create Task] (not Basic Task)
 #   3. General tab:
 #      - Name: STT Server
 #      - Description: faster-whisper STT HTTP server
 #      - "Run whether user is logged on or not"
-#      - "Run with highest privileges"
-#   4. Triggers tab -> New:
+#      - "Run with highest privileges" ✓
+#   4. Triggers tab → New:
 #      - "At startup"
 #      - Delay 30 seconds (wait for GPU driver init)
-#   5. Actions tab -> New:
+#   5. Actions tab → New:
 #      - Program/script: powershell.exe
 #      - Add arguments:
 #        -ExecutionPolicy Bypass -File "<REPO>\stt\start_stt_server.ps1"
@@ -97,7 +97,7 @@ uvicorn stt.faster_whisper_server:app `
 #   6. Conditions tab: uncheck "AC power"
 #   7. Settings tab:
 #      - Uncheck "Stop the task if it runs longer than"
-#      - "If already running" -> "Do not start a new instance"
+#      - "If the task is already running…" → "Do not start a new instance"
 #
 # Test:
 #   curl http://192.168.12.107:8093/health
