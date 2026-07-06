@@ -1,8 +1,6 @@
 import json
 from dataclasses import dataclass, field
 
-from local_ai_companion.stt import STTConfig
-
 
 @dataclass(frozen=True)
 class ConversationConfig:
@@ -36,7 +34,6 @@ class AppConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     vad: VADConfig = field(default_factory=VADConfig)
-    stt: STTConfig = field(default_factory=STTConfig)
 
 
 def load_config(path=None):
@@ -51,7 +48,6 @@ def load_config(path=None):
     prompt_raw = raw.get("prompt", {})
     logging_raw = raw.get("logging", {})
     vad_raw = raw.get("vad", {})
-    stt_raw = raw.get("stt", {})
 
     return AppConfig(
         conversation=ConversationConfig(
@@ -82,12 +78,6 @@ def load_config(path=None):
             silence_duration_ms=int(vad_raw.get("silence_duration_ms", 300)),
             min_speech_duration_ms=int(vad_raw.get("min_speech_duration_ms", 500)),
             model_path=vad_raw.get("model_path", "models/silero_vad.onnx"),
-        ),
-        stt=STTConfig(
-            server_url=stt_raw.get("server_url", "http://192.168.12.107:8093/v1/transcribe"),
-            timeout_seconds=float(stt_raw.get("timeout_seconds", 5.0)),
-            language=stt_raw.get("language", "ja"),
-            sample_rate=int(stt_raw.get("sample_rate", 16000)),
         ),
     )
 
