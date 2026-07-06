@@ -66,6 +66,14 @@ func (sm *StateMachine) Current() State {
 	return sm.current
 }
 
+// IsSpeaking returns true when the state machine is in SPEAKING state.
+// Used for TTS feedback loop prevention: audio input is discarded while speaking.
+func (sm *StateMachine) IsSpeaking() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.current == SPEAKING
+}
+
 // Transition attempts to change to the target state.
 // Returns an error if the transition is not allowed.
 func (sm *StateMachine) Transition(to State) error {
