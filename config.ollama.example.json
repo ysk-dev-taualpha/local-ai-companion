@@ -20,6 +20,14 @@
     "include_user_text": false,
     "include_raw_response": false
   },
+  "vad": {
+    "enabled": false,
+    "sample_rate": 16000,
+    "speech_threshold": 0.5,
+    "silence_duration_ms": 300,
+    "min_speech_duration_ms": 500,
+    "model_path": "models/silero_vad.onnx"
+  },
   "stt": {
     "server_url": "http://192.168.12.107:8093/v1/transcribe",
     "timeout_seconds": 5.0,

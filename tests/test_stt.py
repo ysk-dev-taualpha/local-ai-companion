@@ -113,6 +113,7 @@ class TestSTTClientTranscribe(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def test_successful_transcription(self):
         cfg = STTConfig(server_url=self.server_url)
@@ -150,6 +151,7 @@ class TestSTTClientNoSpeech(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def test_empty_text_returns_no_speech_error(self):
         cfg = STTConfig(server_url=self.server_url)
@@ -179,6 +181,7 @@ class TestSTTClientTimeout(unittest.TestCase):
             self.assertEqual(result["error"], "timeout")
         finally:
             server.shutdown()
+            server.server_close()
 
 
 class _RetryHandler(BaseHTTPRequestHandler):
@@ -217,6 +220,7 @@ class TestSTTClientRetry(unittest.TestCase):
             self.assertEqual(_RetryHandler.request_count, 2)
         finally:
             server.shutdown()
+            server.server_close()
 
 
 class _AlwaysFailingHandler(BaseHTTPRequestHandler):
@@ -238,6 +242,7 @@ class TestSTTClientConnectionRefused(unittest.TestCase):
             self.assertEqual(result["error"], "connection refused")
         finally:
             server.shutdown()
+            server.server_close()
 
     def test_invalid_url_returns_connection_refused(self):
         cfg = STTConfig(server_url="http://127.0.0.1:19999/transcribe")
