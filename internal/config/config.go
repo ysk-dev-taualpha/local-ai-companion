@@ -54,6 +54,14 @@ type AgentConfig struct {
 	WebSearchAPIKeyEnv string   `json:"web_search_api_key_env"`
 }
 
+// VoiceInputConfig は音声入力 (VAD + STT) の設定です。
+type VoiceInputConfig struct {
+	Enabled    bool   `json:"enabled"`
+	VADURL     string `json:"vad_url"`
+	STTServerURL string `json:"stt_server_url"`
+	STTTimeoutMs int  `json:"stt_timeout_ms"`
+}
+
 type Config struct {
 	Runtime       RuntimeConfig       `json:"runtime"`
 	WebSocket     WebSocketConfig     `json:"websocket"`
@@ -62,6 +70,7 @@ type Config struct {
 	TTS           TTSConfig           `json:"tts"`
 	Ollama        OllamaConfig        `json:"ollama"`
 	Agent         AgentConfig         `json:"agent"`
+	VoiceInput    VoiceInputConfig    `json:"voice_input"`
 }
 
 func Load(path string) (*Config, error) {
@@ -98,6 +107,12 @@ func Load(path string) (*Config, error) {
 			Locale:             "ja-JP",
 			WebSearchURL:       "https://ollama.com/api/web_search",
 			WebSearchAPIKeyEnv: "",
+		},
+		VoiceInput: VoiceInputConfig{
+			Enabled:      false,
+			VADURL:       "http://127.0.0.1:8092",
+			STTServerURL: "http://192.168.12.107:8093/v1/transcribe",
+			STTTimeoutMs: 10000,
 		},
 	}
 
