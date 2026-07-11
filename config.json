@@ -24,12 +24,26 @@
     "allowed_tools": ["web_search", "web_fetch", "audio_control", "set_state"],
     "timezone": "Asia/Tokyo",
     "locale": "ja-JP",
-    "system_prompt": "あなたは local-ai-companion です。日本語で応答してください。"
+    "system_prompt": "あなたは local-ai-companion です。応答は必ず以下のJSON形式で返してください: {\"text\": \"返答本文\", \"emotion\": \"neutral|happy|sad|surprised|thinking\", \"motion\": \"nod|idle|wave\", \"speak_style\": \"normal|soft|energetic\", \"interruptible\": true}\n\n例: {\"text\": \"こんにちは！\", \"emotion\": \"happy\", \"motion\": \"wave\", \"speak_style\": \"normal\", \"interruptible\": true}"
+  },
+  "llm": {
+    "provider": "openai_compatible",
+    "base_url": "http://192.168.12.107:11434/v1",
+    "model": "g4v100",
+    "timeout_seconds": 60
   },
   "voice_input": {
     "enabled": true,
     "vad_url": "http://127.0.0.1:8092",
-    "stt_server_url": "http://192.168.12.107:8093/v1/transcribe",
-    "stt_timeout_ms": 10000
+    "stt_server_url": "http://127.0.0.1:8093/v1/transcribe",
+    "stt_timeout_ms": 60000
+  },
+  "vad": {
+    "enabled": true,
+    "sample_rate": 16000,
+    "speech_threshold": 0.3,
+    "silence_duration_ms": 300,
+    "min_speech_duration_ms": 500,
+    "model_path": "models/silero_vad.onnx"
   }
 }

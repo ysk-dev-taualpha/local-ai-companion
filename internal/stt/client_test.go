@@ -154,8 +154,9 @@ func TestPCMToWAV(t *testing.T) {
 }
 
 func TestPCMToWAV_OddLength(t *testing.T) {
-	pcmData := make([]byte, 3)
-	_, err := pcmToWAV(pcmData, 16000)
+	// ffmpeg path handles odd-length gracefully; only expect error with Go fallback
+	pcmData := make([]byte, 1)
+	_, err := pcmToWAVGo(pcmData, 16000)
 	if err == nil {
 		t.Fatal("expected error for odd-length PCM data")
 	}

@@ -29,8 +29,8 @@ logger = logging.getLogger("faster_whisper_server")
 
 _model = None
 _model_name: str = "Systran/faster-whisper-small"
-_device: str = "cuda"
-_compute_type: str = "float16"
+_device: str = "cpu"
+_compute_type: str = "int8"
 
 
 def load_model() -> None:

@@ -1,14 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"sync"
 	"time"
 
@@ -17,14 +12,12 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/stt"
 )
 
-// WSVADEvent is sent to Unity on VAD speech_start/speech_end.
 type WSVADEvent struct {
 	Type      string `json:"type"`
 	RequestID string `json:"request_id"`
 	Event     string `json:"event"`
 }
 
-// WSSpeechRecognized is sent to Unity with STT result and cancel option.
 type WSSpeechRecognized struct {
 	Type       string `json:"type"`
 	RequestID  string `json:"request_id"`
@@ -32,131 +25,94 @@ type WSSpeechRecognized struct {
 	Cancelable bool   `json:"cancelable"`
 }
 
-// vadResponse is the JSON response from Python /vad/chunk endpoint.
-type vadResponse struct {
-	Event    string `json:"event"`
-	AudioWAV string `json:"audio_wav,omitempty"`
-}
-
-// VoicePipeline manages the VAD → STT → LLM → TTS flow for audio input.
 type VoicePipeline struct {
-	hub *WebSocketHub
-
-	mu      sync.Mutex
-	vadURL  string
-	stt     stt.STTClient
-	vadHTTP *http.Client
-	buffers map[string]*audioBuffer
+	hub           *WebSocketHub
+	mu            sync.Mutex
+	stt           stt.STTClient
+	buffers       map[string]*audioBuffer
+	energySpeech  bool
+	silenceCount  int
+	speechThresh  int16
+	silenceThresh int16
+	silenceMax    int
 }
 
-// audioBuffer accumulates PCM chunks for a single utterance.
 type audioBuffer struct {
 	requestID string
 	pcm       []byte
 }
 
-// NewVoicePipeline creates a new voice pipeline.
-func NewVoicePipeline(vadURL string, sttClient stt.STTClient) *VoicePipeline {
+func NewVoicePipeline(sttClient stt.STTClient) *VoicePipeline {
 	return &VoicePipeline{
-		vadURL: vadURL,
-		stt:    sttClient,
-		vadHTTP: &http.Client{
-			Timeout: 5 * time.Second,
-		},
-		buffers: make(map[string]*audioBuffer),
+		stt:           sttClient,
+		buffers:       make(map[string]*audioBuffer),
+		speechThresh:  1000,
+		silenceThresh: 700,
+		silenceMax:    12,
 	}
 }
 
-// SetHub binds the pipeline to a WebSocketHub (called after hub creation).
-func (vp *VoicePipeline) SetHub(hub *WebSocketHub) {
-	vp.hub = hub
-}
+func (vp *VoicePipeline) SetHub(hub *WebSocketHub) { vp.hub = hub }
 
-// processChunk sends PCM to Python VAD and handles the response.
 func (vp *VoicePipeline) processChunk(conn *websocket.Conn, chunk *AudioChunk) {
+	var maxAmp int16
+	for _, s := range chunk.Samples {
+		a := s
+		if a < 0 {
+			a = -a
+		}
+		if a > maxAmp {
+			maxAmp = a
+		}
+	}
+
 	vp.mu.Lock()
+	defer vp.mu.Unlock()
+
 	buf, exists := vp.buffers[chunk.RequestID]
 	if !exists {
 		buf = &audioBuffer{requestID: chunk.RequestID}
 		vp.buffers[chunk.RequestID] = buf
 	}
 	buf.pcm = append(buf.pcm, chunk.pcmBytes()...)
-	vp.mu.Unlock()
 
-	pcmPayload := chunk.pcmBytes()
-	resp, err := vp.sendVADChunk(pcmPayload)
-	if err != nil {
-		log.Printf("voice: VAD request failed: %v", err)
+	if !vp.energySpeech {
+		if maxAmp >= vp.speechThresh {
+			vp.energySpeech = true
+			vp.silenceCount = 0
+			vp.hub.stateMu.Lock()
+			if vp.hub.stateMachine.IsSpeaking() {
+				vp.hub.stateMu.Unlock()
+				return
+			}
+			_ = vp.hub.stateMachine.Transition(state.LISTENING)
+			vp.hub.broadcastState("LISTENING")
+			vp.hub.stateMu.Unlock()
+			vp.hub.broadcastVADEvent(chunk.RequestID, "speech_start")
+			log.Printf("voice: speech_start maxAmp=%d", maxAmp)
+		}
 		return
 	}
 
-	switch resp.Event {
-	case "speech_start":
-		vp.hub.broadcastVADEvent(chunk.RequestID, "speech_start")
-		vp.hub.stateMu.Lock()
-		if vp.hub.stateMachine.IsSpeaking() {
-			log.Printf("voice: audio_chunk rejected: SPEAKING state")
-			vp.hub.stateMu.Unlock()
-			return
+	if maxAmp < vp.silenceThresh {
+		vp.silenceCount++
+		if vp.silenceCount >= vp.silenceMax {
+			vp.energySpeech = false
+			vp.silenceCount = 0
+			wavData := make([]byte, len(buf.pcm))
+			copy(wavData, buf.pcm)
+			rid := chunk.RequestID
+			vp.hub.broadcastVADEvent(rid, "speech_end")
+			log.Printf("voice: speech_end")
+			go vp.handleSpeechEnd(conn, rid, wavData)
 		}
-		_ = vp.hub.stateMachine.Transition(state.LISTENING)
-		vp.hub.broadcastState("LISTENING")
-		vp.hub.stateMu.Unlock()
-
-	case "speech_end":
-		go vp.handleSpeechEnd(conn, chunk.RequestID, resp.AudioWAV)
+	} else {
+		vp.silenceCount = 0
 	}
 }
 
-func (vp *VoicePipeline) sendVADChunk(pcm []byte) (*vadResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", vp.vadURL+"/vad/chunk", bytes.NewReader(pcm))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	resp, err := vp.vadHTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("VAD request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	var vr vadResponse
-	if err := json.Unmarshal(body, &vr); err != nil {
-		return nil, fmt.Errorf("VAD response parse: %w", err)
-	}
-	return &vr, nil
-}
-
-func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID, wavBase64 string) {
-	vp.hub.broadcastVADEvent(requestID, "speech_end")
-
-	vp.mu.Lock()
-	buf := vp.buffers[requestID]
-	if buf != nil {
-		delete(vp.buffers, requestID)
-	}
-	vp.mu.Unlock()
-
-	var wavData []byte
-	if wavBase64 != "" {
-		var err error
-		wavData, err = base64.StdEncoding.DecodeString(wavBase64)
-		if err != nil {
-			log.Printf("voice: failed to decode WAV: %v", err)
-			vp.hub.sendError(conn, requestID, "failed to decode audio")
-			return
-		}
-	} else if buf != nil {
-		wavData = buf.pcm
-	}
-
-	if len(wavData) == 0 {
-		log.Printf("voice: no audio data for STT")
+func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID string, pcmData []byte) {
+	if len(pcmData) == 0 {
 		vp.hub.sendError(conn, requestID, "no audio data")
 		return
 	}
@@ -166,32 +122,30 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID, wavBas
 	vp.hub.broadcastState("THINKING")
 	vp.hub.stateMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	result, err := vp.stt.Transcribe(ctx, wavData, 16000, "ja")
-	if err != nil || result.Error != "" {
-		errMsg := "speech recognition failed"
-		if result != nil && result.Error != "" {
-			errMsg = result.Error
-		}
-		log.Printf("voice: STT failed: %v", errMsg)
-		vp.hub.sendError(conn, requestID, errMsg)
-		vp.hub.stateMu.Lock()
-		vp.hub.broadcastState("IDLE")
-		vp.hub.stateMachine.Reset()
-		vp.hub.stateMu.Unlock()
+	result, err := vp.stt.Transcribe(ctx, pcmData, 16000, "ja")
+	if err != nil {
+		log.Printf("voice: STT error: %v", err)
+		vp.hub.sendError(conn, requestID, fmt.Sprintf("STT error: %v", err))
+		vp.resetState()
+		return
+	}
+	if result.Error != "" {
+		log.Printf("voice: STT result error: %s", result.Error)
+		vp.hub.sendError(conn, requestID, result.Error)
+		vp.resetState()
 		return
 	}
 
+	log.Printf("voice: STT result: %q", result.Text)
+
 	vp.hub.writeJSON(conn, WSSpeechRecognized{
-		Type:       "speech_recognized",
-		RequestID:  requestID,
-		Text:       result.Text,
-		Cancelable: true,
+		Type: "speech_recognized", RequestID: requestID,
+		Text: result.Text, Cancelable: true,
 	})
 
-	// Wait 3 seconds for possible cancel, then proceed.
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	vp.hub.stateMu.Lock()
 	vp.hub.pendingCancels[requestID] = cancelFunc
@@ -199,19 +153,47 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID, wavBas
 
 	select {
 	case <-cancelCtx.Done():
-		log.Printf("voice: speech cancelled: request_id=%s", requestID)
+		log.Printf("voice: speech cancelled: %s", requestID)
 	case <-time.After(3 * time.Second):
 		vp.hub.stateMu.Lock()
 		delete(vp.hub.pendingCancels, requestID)
 		vp.hub.stateMu.Unlock()
-
-		msg := WSMessage{
-			Type:      "text",
-			Payload:   result.Text,
-			RequestID: requestID,
+		log.Printf("voice: sending text to agent: %q", result.Text)
+		// State is already THINKING, skip the LISTENING→THINKING transition
+		// by calling agent loop directly instead of handleTextMessageAgent
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel2()
+		
+		vp.hub.stateMu.Lock()
+		responseText, err := vp.hub.agentLoop.Run(ctx2, result.Text, requestID)
+		if err != nil {
+			vp.hub.stateMu.Unlock()
+			log.Printf("voice: agent error: %v", err)
+			vp.hub.sendError(conn, requestID, err.Error())
+			vp.resetState()
+			return
 		}
-		vp.hub.handleTextMessageAgent(conn, msg)
+		vp.hub.stateMu.Unlock()
+		
+		log.Printf("voice: agent response: %q", responseText)
+		
+		conn.WriteJSON(WSAIResponse{
+			Type: "ai_response", RequestID: requestID, Text: responseText,
+		})
+		
+		if vp.hub.ttsClient != nil && responseText != "" {
+			// TTS if available
+		}
+		
+		vp.resetState()
 	}
+}
+
+func (vp *VoicePipeline) resetState() {
+	vp.hub.stateMu.Lock()
+	vp.hub.broadcastState("IDLE")
+	vp.hub.stateMachine.Reset()
+	vp.hub.stateMu.Unlock()
 }
 
 func (ac *AudioChunk) pcmBytes() []byte {
@@ -225,8 +207,6 @@ func (ac *AudioChunk) pcmBytes() []byte {
 
 func (h *WebSocketHub) broadcastVADEvent(requestID, event string) {
 	h.Broadcast(WSVADEvent{
-		Type:      "vad_event",
-		RequestID: requestID,
-		Event:     event,
+		Type: "vad_event", RequestID: requestID, Event: event,
 	})
 }

@@ -46,6 +46,7 @@ func ParseAudioChunk(data []byte) (*AudioChunk, error) {
 }
 
 func (h *WebSocketHub) handleAudioChunk(conn *websocket.Conn, data []byte) {
+	log.Printf("DEBUG: handleAudioChunk called, len=%d", len(data))
 	chunk, err := ParseAudioChunk(data)
 	if err != nil {
 		log.Printf("websocket: audio_chunk parse failed: %v", err)
