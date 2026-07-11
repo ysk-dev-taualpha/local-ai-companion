@@ -18,6 +18,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/pythonservice"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/stt"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool/tools"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
@@ -70,7 +71,18 @@ func main() {
 			cfg.Ollama.Model, cfg.Agent.MaxToolLoops, cfg.Agent.AllowedTools)
 	}
 
-	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop)
+	// Voice input pipeline (VAD + STT)
+	var vp *api.VoicePipeline
+	if cfg.VoiceInput.Enabled {
+		sttClient := stt.NewFasterWhisper(cfg.VoiceInput.STTServerURL, time.Duration(cfg.VoiceInput.STTTimeoutMs)*time.Millisecond)
+		vp = api.NewVoicePipeline(cfg.VoiceInput.VADURL, sttClient)
+		logger.Info("Voice input enabled: vad=%s, stt=%s", cfg.VoiceInput.VADURL, cfg.VoiceInput.STTServerURL)
+	}
+
+	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop, vp)
+	if vp != nil {
+		vp.SetHub(wsHub)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/conversation", handler.HandleConversation)

@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+
+	"github.com/gorilla/websocket"
 )
 
 const MinAudioChunkHeaderSize = 11
@@ -43,10 +45,14 @@ func ParseAudioChunk(data []byte) (*AudioChunk, error) {
 	return &AudioChunk{RequestID: requestID, Seq: seq, SampleRate: sampleRate, Samples: samples}, nil
 }
 
-func (h *WebSocketHub) handleAudioChunk(data []byte) {
+func (h *WebSocketHub) handleAudioChunk(conn *websocket.Conn, data []byte) {
 	chunk, err := ParseAudioChunk(data)
 	if err != nil {
 		log.Printf("websocket: audio_chunk parse failed: %v", err)
+		return
+	}
+	if h.voicePipeline != nil {
+		h.voicePipeline.processChunk(conn, chunk)
 		return
 	}
 	log.Printf("websocket: audio_chunk received: request_id=%s seq=%d sample_rate=%d samples=%d", chunk.RequestID, chunk.Seq, chunk.SampleRate, len(chunk.Samples))

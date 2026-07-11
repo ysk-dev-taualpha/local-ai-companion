@@ -80,17 +80,19 @@ type WebSocketHub struct {
 	ttsClient        tts.TTSClient
 	stateMachine     *state.StateMachine
 	agentLoop        *agent.Loop
+	voicePipeline    *VoicePipeline
 	requestTimeoutMs int
 	upgrader         websocket.Upgrader
 }
 
-func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop) *WebSocketHub {
+func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop, vp *VoicePipeline) *WebSocketHub {
 	return &WebSocketHub{
 		conns:            make(map[*websocket.Conn]*wsConnState),
 		pythonClient:     pythonClient,
 		ttsClient:        ttsClient,
 		stateMachine:     stateMachine,
 		agentLoop:        agentLoop,
+		voicePipeline:    vp,
 		requestTimeoutMs: requestTimeoutMs,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: buildCheckOrigin(allowedOrigins),
@@ -123,7 +125,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 		// Binary frame → audio chunk
 		if msgType == websocket.BinaryMessage {
-			h.handleAudioChunk(msgBytes)
+			h.handleAudioChunk(conn, msgBytes)
 			continue
 		}
 

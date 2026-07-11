@@ -125,7 +125,7 @@ func TestVoiceInputErrorRecovery(t *testing.T) {
 	errorMock := &mockPythonClient{
 		err: fmt.Errorf("mock STT server error"),
 	}
-	hub := NewWebSocketHub(errorMock, nil, state.New(nil), 5000, nil, nil)
+	hub := NewWebSocketHub(errorMock, nil, state.New(nil), 5000, nil, nil, nil)
 	srv := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
