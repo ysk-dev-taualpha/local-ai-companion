@@ -80,17 +80,15 @@ func (vp *VoicePipeline) processChunk(conn *websocket.Conn, chunk *AudioChunk) {
 		if maxAmp >= vp.speechThresh {
 			vp.energySpeech = true
 			vp.silenceCount = 0
-			// Only transition to LISTENING when IDLE (not busy with TTS/LLM)
-			vp.hub.stateMu.Lock()
-			cur := vp.hub.stateMachine.Current()
-			if cur != state.IDLE {
-				vp.hub.stateMu.Unlock()
-				return
-			}
-			_ = vp.hub.stateMachine.Transition(state.LISTENING)
-			vp.hub.broadcastState("LISTENING")
-			vp.hub.stateMu.Unlock()
 			vp.hub.broadcastVADEvent(chunk.RequestID, "speech_start")
+			// Only transition to LISTENING when IDLE (not busy with TTS/LLM)
+			// but always send vad_event so Unity knows speech was detected
+			vp.hub.stateMu.Lock()
+			if vp.hub.stateMachine.Current() == state.IDLE {
+				_ = vp.hub.stateMachine.Transition(state.LISTENING)
+				vp.hub.broadcastState("LISTENING")
+			}
+			vp.hub.stateMu.Unlock()
 			log.Printf("voice: speech_start maxAmp=%d", maxAmp)
 		}
 		return
