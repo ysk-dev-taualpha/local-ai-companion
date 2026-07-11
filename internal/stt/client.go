@@ -15,8 +15,9 @@ import (
 
 // Result は音声認識の結果を表します。
 type Result struct {
-	Text  string `json:"text"`
-	Error string `json:"error,omitempty"`
+	Text     string  `json:"text"`
+	Duration float64 `json:"duration,omitempty"`
+	Error    string  `json:"error,omitempty"`
 }
 
 // STTClient は音声認識エンジンの共通インターフェースです。
@@ -75,8 +76,9 @@ func (c *FasterWhisperClient) Transcribe(ctx context.Context, pcmData []byte, sa
 	}
 
 	var sttResp struct {
-		Text  string `json:"text"`
-		Error string `json:"error,omitempty"`
+		Text     string  `json:"text"`
+		Duration float64 `json:"duration"`
+		Error    string  `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(respBody, &sttResp); err != nil {
 		return &Result{Text: "", Error: fmt.Sprintf("invalid response: %v", err)}, nil
@@ -90,7 +92,7 @@ func (c *FasterWhisperClient) Transcribe(ctx context.Context, pcmData []byte, sa
 		return &Result{Text: "", Error: sttResp.Error}, nil
 	}
 
-	return &Result{Text: text}, nil
+	return &Result{Text: text, Duration: sttResp.Duration}, nil
 }
 
 // pcmToWAV は raw PCM int16 モノラルデータを WAV 形式に変換します。
@@ -131,7 +133,7 @@ func buildMultipart(wavData []byte, language string) (body []byte, contentType s
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	audioPart, err := writer.CreateFormFile("audio_file", "audio.wav")
+	audioPart, err := writer.CreateFormFile("file", "audio.wav")
 	if err != nil {
 		return nil, "", err
 	}
