@@ -193,20 +193,26 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	}
 	h.broadcastState("SPEAKING")
 
+	assistant := parseAssistantResponse(responseText)
 	aiResp := WSAIResponse{
 		Type:      "ai_response",
 		RequestID: requestID,
-		Text:      responseText,
+		Assistant: &assistant,
+		Text:      assistant.Text,
 	}
+	log.Printf("websocket: sending ai_response: request_id=%s text=%q", requestID, assistant.Text)
 
-	if h.ttsClient != nil && responseText != "" {
-		audioData, ttsErr := h.ttsClient.Speak(responseText)
-		if ttsErr != nil {
-			log.Printf("websocket: tts synthesis failed: %v", ttsErr)
-		} else {
-			aiResp.Audio = base64.StdEncoding.EncodeToString(audioData)
+	func() {
+		defer func() { recover() }()
+		if h.ttsClient != nil && assistant.Text != "" {
+			audioData, ttsErr := h.ttsClient.Speak(assistant.Text)
+			if ttsErr != nil {
+				log.Printf("websocket: tts synthesis failed: %v", ttsErr)
+			} else {
+				aiResp.Audio = base64.StdEncoding.EncodeToString(audioData)
+			}
 		}
-	}
+	}()
 	if err := h.writeJSON(conn, aiResp); err != nil {
 		log.Printf("websocket: failed to write ai_response: %v", err)
 	}
@@ -216,6 +222,40 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 		h.stateMachine.Reset()
 	}
 	h.broadcastState("IDLE")
+}
+
+func parseAssistantResponse(raw string) client.AssistantMessage {
+	assistant := client.AssistantMessage{
+		Text:          raw,
+		SpeakStyle:    "normal",
+		Interruptible: true,
+	}
+	if raw == "" {
+		return assistant
+	}
+
+	// Strip markdown code fences: ```json ... ```
+	clean := raw
+	clean = strings.TrimSpace(clean)
+	clean = strings.TrimPrefix(clean, "```json\n")
+	clean = strings.TrimPrefix(clean, "```json")
+	clean = strings.TrimPrefix(clean, "```\n")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "\n```")
+	clean = strings.TrimSuffix(clean, "```")
+	clean = strings.TrimSpace(clean)
+
+	var parsed client.AssistantMessage
+	if err := json.Unmarshal([]byte(clean), &parsed); err != nil {
+		return assistant
+	}
+	if parsed.Text == "" {
+		return assistant
+	}
+	if parsed.SpeakStyle == "" {
+		parsed.SpeakStyle = "normal"
+	}
+	return parsed
 }
 
 func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
