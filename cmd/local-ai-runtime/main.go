@@ -75,7 +75,7 @@ func main() {
 	var vp *api.VoicePipeline
 	if cfg.VoiceInput.Enabled {
 		sttClient := stt.NewFasterWhisper(cfg.VoiceInput.STTServerURL, time.Duration(cfg.VoiceInput.STTTimeoutMs)*time.Millisecond)
-		vp = api.NewVoicePipeline(sttClient)
+		vp = api.NewVoicePipeline(cfg.VoiceInput.VADURL, sttClient)
 		logger.Info("Voice input enabled: vad=%s, stt=%s", cfg.VoiceInput.VADURL, cfg.VoiceInput.STTServerURL)
 	}
 

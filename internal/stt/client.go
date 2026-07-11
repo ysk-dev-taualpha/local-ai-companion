@@ -98,6 +98,10 @@ func isWAV(data []byte) bool {
 }
 
 func pcmToWAV(pcmData []byte, sampleRate int) ([]byte, error) {
+	return pcmToWAVGo(pcmData, sampleRate)
+}
+
+func pcmToWAVGo(pcmData []byte, sampleRate int) ([]byte, error) {
 	if len(pcmData)%2 != 0 {
 		return nil, fmt.Errorf("pcm data length must be even (int16 samples), got %d bytes", len(pcmData))
 	}
