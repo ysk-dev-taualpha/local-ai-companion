@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,6 +19,10 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
+
+const voiceSystemPrompt = `あなたは常駐型AIアシスタントです。応答は短く簡潔に、必ず以下のJSON形式で返してください:
+{"text": "返答本文", "emotion": "neutral", "motion": "nod", "speak_style": "normal", "interruptible": true}
+emotion: neutral/happy/sad/surprised/thinking, motion: nod/idle/wave`
 
 func buildCheckOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	if len(allowedOrigins) == 0 {
@@ -163,14 +169,7 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	if requestID == "" {
 		requestID = newRequestID()
 	}
-	h.runAgentAndRespond(conn, msg.Payload, requestID)
-}
 
-func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestID string) {
-	h.runAgentAndRespond(conn, text, requestID)
-}
-
-func (h *WebSocketHub) runAgentAndRespond(conn *websocket.Conn, payload, requestID string) {
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
 
@@ -181,23 +180,19 @@ func (h *WebSocketHub) runAgentAndRespond(conn *websocket.Conn, payload, request
 		return
 	}
 	h.broadcastState("LISTENING")
-
 	if err := h.stateMachine.Transition(state.THINKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
 		h.stateMu.Unlock()
-		h.sendError(conn, requestID, "invalid state transition to thinking: "+err.Error())
+		h.sendError(conn, requestID, "invalid state transition: "+err.Error())
 		return
 	}
 	h.broadcastState("THINKING")
 	h.stateMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
-	defer cancel()
-
-	responseText, err := h.agentLoop.Run(ctx, payload, requestID)
-	if err != nil {
-		h.sendError(conn, requestID, err.Error())
+	responseText := h.callOllama(msg.Payload, "")
+	if responseText == "" {
+		h.sendError(conn, requestID, "LLM returned empty response")
 		h.resetAndBroadcastIdle()
 		return
 	}
@@ -209,33 +204,108 @@ func (h *WebSocketHub) runAgentAndRespond(conn *websocket.Conn, payload, request
 		Assistant: &assistant,
 		Text:      assistant.Text,
 	}
-	log.Printf("websocket: sending ai_response: request_id=%s text=%q", requestID, assistant.Text)
+	log.Printf("websocket: ai_response: request_id=%s text=%q", requestID, assistant.Text)
 
 	if err := h.writeJSON(conn, aiResp); err != nil {
-		log.Printf("websocket: failed to write ai_response: %v", err)
+		log.Printf("websocket: write ai_response failed: %v", err)
 		h.resetAndBroadcastIdle()
 		return
 	}
 
 	h.stateMu.Lock()
-	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
-		h.stateMu.Unlock()
-		h.resetAndBroadcastIdle()
-		return
-	}
+	_ = h.stateMachine.Transition(state.SPEAKING)
 	h.broadcastState("SPEAKING")
 	h.stateMu.Unlock()
 
-	// TTS: send audio as separate message after text response
 	go h.sendTTSSeparately(conn, requestID, assistant.Text)
 
 	h.stateMu.Lock()
-	if err := h.stateMachine.Transition(state.IDLE); err != nil {
-		log.Printf("websocket: failed to transition to IDLE: %v", err)
-		h.stateMachine.Reset()
-	}
+	_ = h.stateMachine.Transition(state.IDLE)
 	h.broadcastState("IDLE")
 	h.stateMu.Unlock()
+}
+
+func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestID string) {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
+
+	responseText := h.callOllama(text, voiceSystemPrompt)
+	if responseText == "" {
+		h.sendError(conn, requestID, "LLM returned empty response")
+		h.resetAndBroadcastIdle()
+		return
+	}
+
+	assistant := parseAssistantResponse(responseText)
+	aiResp := WSAIResponse{
+		Type:      "ai_response",
+		RequestID: requestID,
+		Assistant: &assistant,
+		Text:      assistant.Text,
+	}
+	log.Printf("websocket: ai_response: request_id=%s text=%q", requestID, assistant.Text)
+
+	if err := h.writeJSON(conn, aiResp); err != nil {
+		log.Printf("websocket: write ai_response failed: %v", err)
+		h.resetAndBroadcastIdle()
+		return
+	}
+
+	h.stateMu.Lock()
+	_ = h.stateMachine.Transition(state.SPEAKING)
+	h.broadcastState("SPEAKING")
+	h.stateMu.Unlock()
+
+	go h.sendTTSSeparately(conn, requestID, assistant.Text)
+
+	h.stateMu.Lock()
+	_ = h.stateMachine.Transition(state.IDLE)
+	h.broadcastState("IDLE")
+	h.stateMu.Unlock()
+}
+
+func (h *WebSocketHub) callOllama(prompt, systemPrompt string) string {
+	var messages string
+	if systemPrompt != "" {
+		messages = fmt.Sprintf(`[{"role":"system","content":"%s"},{"role":"user","content":"%s"}]`,
+			escapeJSON(systemPrompt), escapeJSON(prompt))
+	} else {
+		messages = fmt.Sprintf(`[{"role":"user","content":"%s"}]`, escapeJSON(prompt))
+	}
+
+	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, messages)
+	req, _ := http.NewRequest("POST", "http://192.168.12.107:11434/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("ollama: request failed: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32768))
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil || len(result.Choices) == 0 {
+		log.Printf("ollama: parse failed: %v body=%s", err, string(respBody[:min(200, len(respBody))]))
+		return ""
+	}
+	return result.Choices[0].Message.Content
+}
+
+func escapeJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b[1 : len(b)-1])
 }
 
 func (h *WebSocketHub) sendTTSSeparately(conn *websocket.Conn, requestID, text string) {

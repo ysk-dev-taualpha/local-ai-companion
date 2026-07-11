@@ -35,7 +35,7 @@
   "voice_input": {
     "enabled": true,
     "vad_url": "http://127.0.0.1:8092",
-    "stt_server_url": "http://127.0.0.1:8093/v1/transcribe",
+    "stt_server_url": "http://192.168.12.107:8093/v1/transcribe",
     "stt_timeout_ms": 60000
   },
   "vad": {
