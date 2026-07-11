@@ -63,6 +63,13 @@ type WSAIResponse struct {
 	Error          string                   `json:"error,omitempty"`
 }
 
+type WSAudioMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	Data      string `json:"data"`
+	Format    string `json:"format"`
+}
+
 type WSStateNotification struct {
 	Type  string `json:"type"`
 	State string `json:"state"`
@@ -75,6 +82,7 @@ type wsConnState struct {
 type WebSocketHub struct {
 	mu               sync.RWMutex
 	stateMu          sync.Mutex
+	agentMu          sync.Mutex
 	conns            map[*websocket.Conn]*wsConnState
 	pythonClient     PythonClient
 	ttsClient        tts.TTSClient
@@ -125,7 +133,6 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Binary frame → audio chunk
 		if msgType == websocket.BinaryMessage {
 			h.handleAudioChunk(conn, msgBytes)
 			continue
@@ -139,7 +146,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "text":
 			if h.agentLoop != nil {
-				h.handleTextMessageAgent(conn, msg)
+				go h.handleTextMessageAgent(conn, msg)
 			} else {
 				h.handleTextMessage(conn, msg)
 			}
@@ -152,11 +159,25 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessage) {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
+	requestID := msg.RequestID
+	if requestID == "" {
+		requestID = newRequestID()
+	}
+	h.runAgentAndRespond(conn, msg.Payload, requestID)
+}
 
+func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestID string) {
+	h.runAgentAndRespond(conn, text, requestID)
+}
+
+func (h *WebSocketHub) runAgentAndRespond(conn *websocket.Conn, payload, requestID string) {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
+
+	h.stateMu.Lock()
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
-		h.sendError(conn, msg.RequestID, "invalid state for listening: "+err.Error())
+		h.stateMu.Unlock()
+		h.sendError(conn, requestID, "busy: "+err.Error())
 		return
 	}
 	h.broadcastState("LISTENING")
@@ -164,34 +185,22 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	if err := h.stateMachine.Transition(state.THINKING); err != nil {
 		h.broadcastState("IDLE")
 		h.stateMachine.Reset()
-		h.sendError(conn, msg.RequestID, "invalid state transition to thinking: "+err.Error())
+		h.stateMu.Unlock()
+		h.sendError(conn, requestID, "invalid state transition to thinking: "+err.Error())
 		return
 	}
 	h.broadcastState("THINKING")
+	h.stateMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.requestTimeoutMs)*time.Millisecond)
 	defer cancel()
 
-	requestID := msg.RequestID
-	if requestID == "" {
-		requestID = newRequestID()
-	}
-
-	responseText, err := h.agentLoop.Run(ctx, msg.Payload, requestID)
+	responseText, err := h.agentLoop.Run(ctx, payload, requestID)
 	if err != nil {
 		h.sendError(conn, requestID, err.Error())
-		h.broadcastState("IDLE")
-		h.stateMachine.Reset()
+		h.resetAndBroadcastIdle()
 		return
 	}
-
-	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
-		h.broadcastState("IDLE")
-		h.stateMachine.Reset()
-		h.sendError(conn, msg.RequestID, "invalid state transition to speaking: "+err.Error())
-		return
-	}
-	h.broadcastState("SPEAKING")
 
 	assistant := parseAssistantResponse(responseText)
 	aiResp := WSAIResponse{
@@ -202,26 +211,54 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	}
 	log.Printf("websocket: sending ai_response: request_id=%s text=%q", requestID, assistant.Text)
 
-	func() {
-		defer func() { recover() }()
-		if h.ttsClient != nil && assistant.Text != "" {
-			audioData, ttsErr := h.ttsClient.Speak(assistant.Text)
-			if ttsErr != nil {
-				log.Printf("websocket: tts synthesis failed: %v", ttsErr)
-			} else {
-				aiResp.Audio = base64.StdEncoding.EncodeToString(audioData)
-			}
-		}
-	}()
 	if err := h.writeJSON(conn, aiResp); err != nil {
 		log.Printf("websocket: failed to write ai_response: %v", err)
+		h.resetAndBroadcastIdle()
+		return
 	}
 
+	h.stateMu.Lock()
+	if err := h.stateMachine.Transition(state.SPEAKING); err != nil {
+		h.stateMu.Unlock()
+		h.resetAndBroadcastIdle()
+		return
+	}
+	h.broadcastState("SPEAKING")
+	h.stateMu.Unlock()
+
+	// TTS: send audio as separate message after text response
+	go h.sendTTSSeparately(conn, requestID, assistant.Text)
+
+	h.stateMu.Lock()
 	if err := h.stateMachine.Transition(state.IDLE); err != nil {
 		log.Printf("websocket: failed to transition to IDLE: %v", err)
 		h.stateMachine.Reset()
 	}
 	h.broadcastState("IDLE")
+	h.stateMu.Unlock()
+}
+
+func (h *WebSocketHub) sendTTSSeparately(conn *websocket.Conn, requestID, text string) {
+	func() {
+		defer func() { recover() }()
+		if h.ttsClient == nil || text == "" {
+			return
+		}
+		audioData, ttsErr := h.ttsClient.Speak(text)
+		if ttsErr != nil {
+			log.Printf("websocket: tts synthesis failed: %v", ttsErr)
+			return
+		}
+		audioMsg := WSAudioMessage{
+			Type:      "audio",
+			RequestID: requestID,
+			Data:      base64.StdEncoding.EncodeToString(audioData),
+			Format:    "wav",
+		}
+		if err := h.writeJSON(conn, audioMsg); err != nil {
+			log.Printf("websocket: failed to write audio message: %v", err)
+		}
+	}()
 }
 
 func parseAssistantResponse(raw string) client.AssistantMessage {
@@ -234,7 +271,6 @@ func parseAssistantResponse(raw string) client.AssistantMessage {
 		return assistant
 	}
 
-	// Strip markdown code fences: ```json ... ```
 	clean := raw
 	clean = strings.TrimSpace(clean)
 	clean = strings.TrimPrefix(clean, "```json\n")
@@ -322,6 +358,13 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		log.Printf("websocket: failed to transition to IDLE: %v", err)
 		h.stateMachine.Reset()
 	}
+	h.broadcastState("IDLE")
+}
+
+func (h *WebSocketHub) resetAndBroadcastIdle() {
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
+	h.stateMachine.Reset()
 	h.broadcastState("IDLE")
 }
 
