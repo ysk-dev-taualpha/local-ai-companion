@@ -19,9 +19,12 @@ namespace AICompanion
         private const float ReconnectDelaySeconds = 3f;
 
         private readonly string _url;
+        private readonly string _name;
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
         private bool _isDisposed;
+        private bool _reconnectScheduled;
 
         /// <summary>接続確立時に発火。</summary>
         public event Action OnConnected;
@@ -38,9 +41,10 @@ namespace AICompanion
         /// <summary>接続中かどうか。</summary>
         public bool IsConnected => _ws?.State == WebSocketState.Open;
 
-        public WebSocketClient(string url = null)
+        public WebSocketClient(string url = null, string name = "ws")
         {
             _url = url ?? DefaultUrl;
+            _name = name;
         }
 
         /// <summary>
@@ -60,7 +64,8 @@ namespace AICompanion
                 _ws = new ClientWebSocket();
                 await _ws.ConnectAsync(new Uri(_url), _cts.Token);
 
-                Debug.Log($"[WebSocketClient] Connected to {_url}");
+                _reconnectScheduled = false;
+                Debug.Log($"[WebSocketClient:{_name}] Connected to {_url}");
                 OnConnected?.Invoke();
 
                 // バックグラウンドで受信ループ開始
@@ -68,10 +73,10 @@ namespace AICompanion
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[WebSocketClient] Connect failed: {ex.Message}");
+                Debug.LogWarning($"[WebSocketClient:{_name}] Connect failed: {_url}: {ex.Message}");
                 OnError?.Invoke(ex.Message);
                 // 自動再接続
-                _ = ReconnectAfterDelayAsync();
+                ScheduleReconnect();
             }
         }
 
@@ -82,7 +87,7 @@ namespace AICompanion
         {
             if (!IsConnected)
             {
-                Debug.LogWarning("[WebSocketClient] Cannot send: not connected");
+                Debug.LogWarning($"[WebSocketClient:{_name}] Cannot send: not connected");
                 OnError?.Invoke("Not connected");
                 return;
             }
@@ -90,16 +95,72 @@ namespace AICompanion
             try
             {
                 var buffer = Encoding.UTF8.GetBytes(json);
-                await _ws.SendAsync(
-                    new ArraySegment<byte>(buffer),
-                    WebSocketMessageType.Text,
-                    endOfMessage: true,
-                    _cts.Token);
+                var ct = _cts?.Token ?? CancellationToken.None;
+                await _sendLock.WaitAsync(ct);
+                try
+                {
+                    if (!IsConnected)
+                    {
+                        Debug.LogWarning($"[WebSocketClient:{_name}] Cannot send: disconnected while waiting");
+                        OnError?.Invoke("Not connected");
+                        return;
+                    }
+                    await _ws.SendAsync(
+                        new ArraySegment<byte>(buffer),
+                        WebSocketMessageType.Text,
+                        endOfMessage: true,
+                        ct);
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[WebSocketClient] Send failed: {ex.Message}");
+                Debug.LogError($"[WebSocketClient:{_name}] Send failed: {ex.Message}");
                 OnError?.Invoke(ex.Message);
+            }
+        }
+
+        public async Task<bool> SendBinaryAsync(byte[] data)
+        {
+            if (!IsConnected)
+            {
+                Debug.LogWarning($"[WebSocketClient:{_name}] Cannot send binary: not connected");
+                OnError?.Invoke("Not connected");
+                return false;
+            }
+
+            try
+            {
+                var ct = _cts?.Token ?? CancellationToken.None;
+                await _sendLock.WaitAsync(ct);
+                try
+                {
+                    if (!IsConnected)
+                    {
+                        Debug.LogWarning($"[WebSocketClient:{_name}] Cannot send binary: disconnected while waiting");
+                        OnError?.Invoke("Not connected");
+                        return false;
+                    }
+                    await _ws.SendAsync(
+                        new ArraySegment<byte>(data),
+                        WebSocketMessageType.Binary,
+                        endOfMessage: true,
+                        ct);
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[WebSocketClient:{_name}] Binary send failed: {ex.Message}");
+                OnError?.Invoke(ex.Message);
+                return false;
             }
         }
 
@@ -140,7 +201,7 @@ namespace AICompanion
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        Debug.Log("[WebSocketClient] Server closed connection");
+                        Debug.Log($"[WebSocketClient:{_name}] Server closed connection");
                         await _ws.CloseAsync(
                             WebSocketCloseStatus.NormalClosure,
                             "Ack",
@@ -157,7 +218,7 @@ namespace AICompanion
                         {
                             var message = Encoding.UTF8.GetString(fragments.ToArray());
                             fragments.Clear();
-                            Debug.Log($"[WebSocketClient] Received: {message}");
+                            Debug.Log($"[WebSocketClient:{_name}] Received: {message}");
                             OnMessageReceived?.Invoke(message);
                         }
                     }
@@ -165,16 +226,16 @@ namespace AICompanion
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("[WebSocketClient] Receive loop cancelled");
+                Debug.Log($"[WebSocketClient:{_name}] Receive loop cancelled");
             }
             catch (WebSocketException ex)
             {
-                Debug.LogWarning($"[WebSocketClient] WebSocket error: {ex.Message}");
+                Debug.LogWarning($"[WebSocketClient:{_name}] WebSocket error: {ex.Message}");
                 OnError?.Invoke(ex.Message);
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[WebSocketClient] Receive error: {ex.Message}");
+                Debug.LogError($"[WebSocketClient:{_name}] Receive error: {ex.Message}");
                 OnError?.Invoke(ex.Message);
             }
             finally
@@ -183,9 +244,17 @@ namespace AICompanion
                 // 自動再接続（Dispose 時は除く）
                 if (!_isDisposed)
                 {
-                    _ = ReconnectAfterDelayAsync();
+                    ScheduleReconnect();
                 }
             }
+        }
+
+        private void ScheduleReconnect()
+        {
+            if (_isDisposed || _reconnectScheduled)
+                return;
+            _reconnectScheduled = true;
+            _ = ReconnectAfterDelayAsync();
         }
 
         private async Task ReconnectAfterDelayAsync()
@@ -193,7 +262,8 @@ namespace AICompanion
             await Task.Delay(TimeSpan.FromSeconds(ReconnectDelaySeconds));
             if (!_isDisposed)
             {
-                Debug.Log("[WebSocketClient] Attempting reconnect...");
+                _reconnectScheduled = false;
+                Debug.Log($"[WebSocketClient:{_name}] Attempting reconnect to {_url}...");
                 await ConnectAsync();
             }
         }
@@ -209,6 +279,7 @@ namespace AICompanion
 
             _ws?.Dispose();
             _ws = null;
+            _sendLock.Dispose();
 
             OnConnected = null;
             OnDisconnected = null;

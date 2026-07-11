@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.Networking;
@@ -36,6 +37,8 @@ namespace AICompanion
         public string request_id;
         public string conversation_id;
         public AssistantJson assistant;
+        public string text;
+        public string audio;
         public string error;
     }
 
@@ -84,31 +87,82 @@ namespace AICompanion
         public string action;
     }
 
+    [Serializable]
+    public class SpeechRecognizedJson
+    {
+        public string type;
+        public string request_id;
+        public string text;
+        public bool cancelable;
+    }
+
+    [Serializable]
+    public class VADEventJson
+    {
+        public string type;
+        public string request_id;
+        public string event_name;
+        public string @event;
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("UI References")]
         [SerializeField] private InputField _inputField;
         [SerializeField] private Button _sendButton;
+        [SerializeField] private Button _micButton;
+        [SerializeField] private Dropdown _micDeviceDropdown;
+        [SerializeField] private Slider _micGainSlider;
+        [SerializeField] private Button _cancelSpeechButton;
         [SerializeField] private Text _responseText;
         [SerializeField] private ScrollRect _scrollRect;
         [SerializeField] private Text _statusText;
         [SerializeField] private Text _titleText;
+        [SerializeField] private Text _micText;
+        [SerializeField] private Text _speechText;
 
         [Header("Settings")]
         [SerializeField] private string _wsUrl = "ws://192.168.12.112:8090/ws";
+        [SerializeField] private string _voiceWsUrl = "";
+        [SerializeField] private bool _useSeparateVoiceWebSocket = true;
         [SerializeField] private string _httpFallbackUrl = "http://192.168.12.112:8090/v1/conversation";
+        [SerializeField] private bool _enableHttpFallback;
         [SerializeField] private int _maxResponseLines = 200;
 
         [Header("Audio")]
         [SerializeField] private AudioSource _audioSource;
         [SerializeField] private int _maxAudioQueueSize = 8;
 
+        [Header("Mic Input")]
+        [SerializeField] private bool _autoStartMic = true;
+        [SerializeField] private int _micSampleRate = 16000;
+        [SerializeField] private int _micChunkMs = 100;
+        [SerializeField] private int _micBufferSeconds = 1;
+        [SerializeField, Range(0.1f, 8f)] private float _micGain = 1f;
+
         private WebSocketClient _wsClient;
+        private WebSocketClient _voiceWsClient;
         private readonly List<string> _responseLines = new();
         private readonly Queue<AudioClip> _audioQueue = new();
         private string _currentState = "UNKNOWN";
+        private string _pendingSpeechRequestId;
+        private string _voiceRequestId;
+        private string _selectedMicDevice;
+        private string _lastVoiceError;
         private bool _httpFallbackMode;
+        private bool _micStreaming;
+        private bool _updatingMicDeviceDropdown;
+        private uint _voiceSeq;
+        private uint _micChunksSent;
+        private uint _micSendFailures;
+        private int _micReadPosition;
+        private float _lastMicSendTime;
+        private float _lastMicDebugLogTime;
+        private float _micLevel;
+        private AudioClip _micClip;
         private Coroutine _audioPlaybackCoroutine;
+        private Coroutine _speechCancelWindowCoroutine;
+        private Coroutine _micStreamingCoroutine;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Bootstrap()
@@ -131,22 +185,43 @@ namespace AICompanion
 
             if (string.IsNullOrEmpty(_wsUrl))
             {
-                _httpFallbackMode = true;
-                UpdateStatus("HTTP 接続");
+                _httpFallbackMode = _enableHttpFallback && !string.IsNullOrEmpty(_httpFallbackUrl);
+                UpdateStatus(_httpFallbackMode ? "HTTP fallback" : "WebSocket URL missing");
             }
             else
             {
                 // WebSocket クライアント初期化
-                _wsClient = new WebSocketClient(_wsUrl);
+                _wsClient = new WebSocketClient(_wsUrl, "control");
                 _wsClient.OnConnected += HandleConnected;
                 _wsClient.OnDisconnected += HandleDisconnected;
                 _wsClient.OnMessageReceived += HandleMessageReceived;
                 _wsClient.OnError += HandleError;
+
+                if (_useSeparateVoiceWebSocket)
+                {
+                    _voiceWsClient = new WebSocketClient(FirstNonEmpty(_voiceWsUrl, _wsUrl), "voice");
+                    _voiceWsClient.OnConnected += HandleVoiceConnected;
+                    _voiceWsClient.OnDisconnected += HandleVoiceDisconnected;
+                    _voiceWsClient.OnMessageReceived += HandleVoiceMessageReceived;
+                    _voiceWsClient.OnError += HandleVoiceError;
+                }
             }
 
             // 送信ボタン
             if (_sendButton != null)
                 _sendButton.onClick.AddListener(OnSendClicked);
+            if (_micButton != null)
+                _micButton.onClick.AddListener(OnMicClicked);
+            if (_micDeviceDropdown != null)
+                _micDeviceDropdown.onValueChanged.AddListener(OnMicDeviceSelected);
+            if (_micGainSlider != null)
+            {
+                _micGainSlider.value = _micGain;
+                _micGainSlider.onValueChanged.AddListener(OnMicGainChanged);
+            }
+            if (_cancelSpeechButton != null)
+                _cancelSpeechButton.onClick.AddListener(OnCancelSpeechClicked);
+            UpdateMicDeviceDropdownOptions();
 
             // Enter キーでも送信
             if (_inputField != null)
@@ -158,13 +233,19 @@ namespace AICompanion
                 _ = _wsClient.ConnectAsync();
                 UpdateStatus("接続中...");
             }
+            if (_voiceWsClient != null)
+                _ = _voiceWsClient.ConnectAsync();
         }
 
         private void OnDestroy()
         {
+            StopMicStreaming();
             _ = _wsClient?.DisconnectAsync();
             _wsClient?.Dispose();
+            _ = _voiceWsClient?.DisconnectAsync();
+            _voiceWsClient?.Dispose();
             StopAudioPlayback();
+            StopSpeechCancelWindow();
         }
 
         /// <summary>
@@ -173,6 +254,72 @@ namespace AICompanion
         public void OnSendClicked()
         {
             SendMessage();
+        }
+
+        public void OnMicClicked()
+        {
+            if (_micStreaming)
+                StopMicStreaming();
+            else
+                StartMicStreaming();
+        }
+
+        public void OnMicDeviceSelected(int index)
+        {
+            if (_updatingMicDeviceDropdown)
+                return;
+
+            var devices = Microphone.devices;
+            if (devices == null || index < 0 || index >= devices.Length)
+            {
+                UpdateMicDeviceDropdownOptions();
+                return;
+            }
+
+            var nextDevice = devices[index];
+            if (_selectedMicDevice == nextDevice)
+                return;
+
+            var wasStreaming = _micStreaming;
+            if (wasStreaming)
+                StopMicStreaming();
+
+            _selectedMicDevice = nextDevice;
+            UpdateMicStatusText();
+            AppendResponse($"<color=#aaaaaa>[Mic] device: {_selectedMicDevice}</color>");
+
+            if (wasStreaming)
+                StartMicStreaming();
+        }
+
+        public void OnMicGainChanged(float value)
+        {
+            _micGain = Mathf.Clamp(value, 0.1f, 8f);
+            UpdateMicStatusText();
+        }
+
+        public async void OnCancelSpeechClicked()
+        {
+            if (string.IsNullOrEmpty(_pendingSpeechRequestId))
+                return;
+
+            var requestId = _pendingSpeechRequestId;
+            ClearPendingSpeech();
+
+            if (_wsClient == null || !_wsClient.IsConnected)
+            {
+                AppendResponse("<color=#ff6666>[Speech] cannot cancel: WebSocket is not connected</color>");
+                return;
+            }
+
+            var json = JsonUtility.ToJson(new MessageJson
+            {
+                type = "cancel_speech",
+                request_id = requestId
+            });
+            await _wsClient.SendAsync(json);
+            AppendResponse("<color=#ffcc66>[Speech] cancelled</color>");
+            UpdateStatus("Speech cancelled");
         }
 
         /// <summary>
@@ -207,9 +354,15 @@ namespace AICompanion
                 request_id = requestId
             });
 
-            if (_httpFallbackMode || _wsClient == null || !_wsClient.IsConnected)
+            if (_httpFallbackMode)
             {
                 StartCoroutine(SendHttpFallback(text, requestId));
+            }
+            else if (_wsClient == null || !_wsClient.IsConnected)
+            {
+                AppendResponse("<color=#ff6666>[Error] WebSocket is not connected</color>");
+                UpdateStatus("WebSocket disconnected");
+                SetSendingState(false);
             }
             else
             {
@@ -253,7 +406,7 @@ namespace AICompanion
                 }
 
                 DisplayAiResponse(req.downloadHandler.text);
-                UpdateStatus("HTTP 接続");
+                UpdateStatus("HTTP fallback");
                 SetSendingState(false);
             }
         }
@@ -299,6 +452,10 @@ namespace AICompanion
                 UpdateStatus("接続済み");
                 AppendResponse("<color=#88cc88>[Connected]</color>");
                 SetSendingState(false);
+                UpdateMicButtonLabel();
+                UpdateMicStatusText();
+                if (_autoStartMic && !_micStreaming && VoiceSocketIsConnected())
+                    StartMicStreaming();
             });
         }
 
@@ -308,6 +465,9 @@ namespace AICompanion
             {
                 UpdateStatus($"切断 ({reason})");
                 AppendResponse($"<color=#ffcc66>[Disconnected] {reason}</color>");
+                if (!_useSeparateVoiceWebSocket)
+                    StopMicStreaming();
+                UpdateMicStatusText();
                 SetSendingState(false);
             });
         }
@@ -316,12 +476,67 @@ namespace AICompanion
         {
             UnityMainThreadDispatcher.Enqueue(() =>
             {
-                _httpFallbackMode = !string.IsNullOrEmpty(_httpFallbackUrl);
+                _httpFallbackMode = _enableHttpFallback && !string.IsNullOrEmpty(_httpFallbackUrl);
                 if (_httpFallbackMode)
-                    UpdateStatus("HTTP 接続");
+                    UpdateStatus("HTTP fallback");
                 else
                     AppendResponse($"<color=#ff6666>[Error] {error}</color>");
                 SetSendingState(false);
+            });
+        }
+
+        private void HandleVoiceConnected()
+        {
+            UnityMainThreadDispatcher.Enqueue(() =>
+            {
+                _lastVoiceError = null;
+                AppendResponse("<color=#88cc88>[Voice WS Connected]</color>");
+                UpdateMicButtonLabel();
+                UpdateMicStatusText();
+                if (_autoStartMic && !_micStreaming)
+                    StartMicStreaming();
+            });
+        }
+
+        private void HandleVoiceDisconnected(string reason)
+        {
+            UnityMainThreadDispatcher.Enqueue(() =>
+            {
+                _lastVoiceError = reason;
+                AppendResponse($"<color=#ffcc66>[Voice WS Disconnected] {reason}</color>");
+                StopMicStreaming();
+                UpdateMicStatusText();
+            });
+        }
+
+        private void HandleVoiceError(string error)
+        {
+            UnityMainThreadDispatcher.Enqueue(() =>
+            {
+                _lastVoiceError = error;
+                AppendResponse($"<color=#ff6666>[Voice WS Error] {error}</color>");
+                UpdateMicStatusText();
+                if (_micStreaming && !VoiceSocketIsConnected())
+                    StopMicStreaming();
+            });
+        }
+
+        private void HandleVoiceMessageReceived(string json)
+        {
+            UnityMainThreadDispatcher.Enqueue(() =>
+            {
+                if (TryHandleSpeechRecognized(json))
+                    return;
+                if (TryHandleAiResponse(json))
+                    return;
+                if (TryHandleError(json))
+                    return;
+                if (TryHandleAudioMessage(json))
+                    return;
+                if (TryHandleAudioControl(json))
+                    return;
+
+                Debug.Log($"[Voice WS] Ignored broadcast/control message: {json}");
             });
         }
 
@@ -330,6 +545,10 @@ namespace AICompanion
             UnityMainThreadDispatcher.Enqueue(() =>
             {
                 if (TryHandleStateChange(json))
+                    return;
+                if (TryHandleVADEvent(json))
+                    return;
+                if (TryHandleSpeechRecognized(json))
                     return;
                 if (TryHandleAudioMessage(json))
                     return;
@@ -342,6 +561,7 @@ namespace AICompanion
                 if (TryHandleAck(json))
                     return;
 
+                Debug.LogWarning($"[UI] Unhandled WebSocket message: {json}");
                 AppendResponse($"<color=#aaaaaa>{json}</color>");
             });
         }
@@ -362,8 +582,57 @@ namespace AICompanion
                 }
                 else if (_currentState == "IDLE")
                 {
+                    RotateVoiceRequest();
+                    UpdateMicStatusText();
                     StopAudioPlayback();
                 }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHandleVADEvent(string json)
+        {
+            try
+            {
+                var vadEvent = JsonUtility.FromJson<VADEventJson>(json);
+                if (vadEvent == null || vadEvent.type != "vad_event")
+                    return false;
+
+                var eventName = FirstNonEmpty(vadEvent.event_name, vadEvent.@event);
+                switch (eventName)
+                {
+                    case "speech_start":
+                        UpdateStatus("Speech detected");
+                        return true;
+                    case "speech_end":
+                        UpdateStatus("Recognizing speech");
+                        RotateVoiceRequest();
+                        return true;
+                    default:
+                        UpdateStatus($"VAD: {eventName}");
+                        return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHandleSpeechRecognized(string json)
+        {
+            try
+            {
+                var speech = JsonUtility.FromJson<SpeechRecognizedJson>(json);
+                if (speech == null || speech.type != "speech_recognized")
+                    return false;
+
+                Debug.Log($"[UI] Speech recognized: request_id={speech.request_id} text={speech.text}");
+                ShowRecognizedSpeech(speech.request_id, speech.text, speech.cancelable);
                 return true;
             }
             catch
@@ -425,9 +694,10 @@ namespace AICompanion
             try
             {
                 var aiResp = JsonUtility.FromJson<AiResponseJson>(json);
-                if (aiResp == null || (aiResp.type != "ai_response" && aiResp.assistant == null))
+                if (aiResp == null || aiResp.type != "ai_response")
                     return false;
 
+                Debug.Log($"[UI] ai_response received: request_id={aiResp.request_id} has_assistant={aiResp.assistant != null} text_len={(aiResp.text == null ? 0 : aiResp.text.Length)} error={aiResp.error}");
                 if (!string.IsNullOrEmpty(aiResp.error))
                 {
                     AppendResponse($"<color=#ff6666>[AI Error] {aiResp.error}</color>");
@@ -436,6 +706,22 @@ namespace AICompanion
                 {
                     AppendResponse($"<color=#66ccff>AI:</color> {aiResp.assistant.text}");
                 }
+                else if (!string.IsNullOrEmpty(aiResp.text))
+                {
+                    AppendResponse($"<color=#66ccff>AI:</color> {ExtractAssistantText(aiResp.text)}");
+                }
+                else
+                {
+                    Debug.LogWarning($"[UI] ai_response had no assistant/text: {json}");
+                }
+                if (!string.IsNullOrEmpty(aiResp.audio))
+                {
+                    HandleAudioMessage(new AudioMessageJson
+                    {
+                        request_id = aiResp.request_id,
+                        data = aiResp.audio
+                    });
+                }
                 SetSendingState(false);
                 return true;
             }
@@ -443,6 +729,27 @@ namespace AICompanion
             {
                 return false;
             }
+        }
+
+        private static string ExtractAssistantText(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            var trimmed = value.Trim();
+            if (!trimmed.StartsWith("{") || !trimmed.EndsWith("}"))
+                return value;
+
+            try
+            {
+                var assistant = JsonUtility.FromJson<AssistantJson>(trimmed);
+                if (assistant != null && !string.IsNullOrEmpty(assistant.text))
+                    return assistant.text;
+            }
+            catch
+            {
+            }
+            return value;
         }
 
         private bool TryHandleError(string json)
@@ -589,6 +896,377 @@ namespace AICompanion
             return null;
         }
 
+        private WebSocketClient VoiceSocket()
+        {
+            return _voiceWsClient ?? _wsClient;
+        }
+
+        private bool VoiceSocketIsConnected()
+        {
+            var voiceClient = VoiceSocket();
+            return voiceClient != null && voiceClient.IsConnected;
+        }
+
+        private void ShowRecognizedSpeech(string requestId, string text, bool cancelable)
+        {
+            _pendingSpeechRequestId = requestId;
+            var displayText = string.IsNullOrEmpty(text) ? "(empty speech)" : text;
+            if (_speechText != null)
+            {
+                _speechText.text = $"Recognized: {displayText}";
+                _speechText.gameObject.SetActive(true);
+            }
+            AppendResponse($"<color=#ffcc66>[Speech]</color> {displayText}");
+
+            if (_cancelSpeechButton != null)
+                _cancelSpeechButton.gameObject.SetActive(cancelable);
+
+            StopSpeechCancelWindow();
+            if (cancelable)
+                _speechCancelWindowCoroutine = StartCoroutine(SpeechCancelWindow());
+
+            UpdateStatus(cancelable ? "Speech recognized: cancel available" : "Speech recognized");
+        }
+
+        private IEnumerator SpeechCancelWindow()
+        {
+            yield return new WaitForSeconds(3f);
+            _pendingSpeechRequestId = null;
+            if (_cancelSpeechButton != null)
+                _cancelSpeechButton.gameObject.SetActive(false);
+            _speechCancelWindowCoroutine = null;
+        }
+
+        private void ClearPendingSpeech()
+        {
+            StopSpeechCancelWindow();
+            _pendingSpeechRequestId = null;
+            if (_speechText != null)
+            {
+                _speechText.text = "";
+                _speechText.gameObject.SetActive(false);
+            }
+            if (_cancelSpeechButton != null)
+                _cancelSpeechButton.gameObject.SetActive(false);
+        }
+
+        private void StopSpeechCancelWindow()
+        {
+            if (_speechCancelWindowCoroutine != null)
+            {
+                StopCoroutine(_speechCancelWindowCoroutine);
+                _speechCancelWindowCoroutine = null;
+            }
+        }
+
+        private void StartMicStreaming()
+        {
+            if (!VoiceSocketIsConnected())
+            {
+                AppendResponse("<color=#ff6666>[Mic] voice WebSocket is not connected</color>");
+                return;
+            }
+            if (!Application.HasUserAuthorization(UserAuthorization.Microphone))
+            {
+                StartCoroutine(RequestMicAuthorizationAndStart());
+                return;
+            }
+            if (_micStreaming)
+                return;
+            if (Microphone.devices == null || Microphone.devices.Length == 0)
+            {
+                AppendResponse("<color=#ff6666>[Mic] no microphone device found</color>");
+                return;
+            }
+            EnsureSelectedMicDevice();
+            UpdateMicDeviceDropdownOptions();
+
+            _voiceRequestId = Guid.NewGuid().ToString();
+            _voiceSeq = 0;
+            _micChunksSent = 0;
+            _micSendFailures = 0;
+            _micReadPosition = 0;
+            _lastMicSendTime = 0f;
+            _lastMicDebugLogTime = 0f;
+            _micClip = Microphone.Start(_selectedMicDevice, true, Mathf.Max(1, _micBufferSeconds), _micSampleRate);
+            if (_micClip == null)
+            {
+                AppendResponse("<color=#ff6666>[Mic] failed to start microphone</color>");
+                return;
+            }
+
+            _micStreaming = true;
+            UpdateMicButtonLabel();
+            UpdateMicStatusText();
+            UpdateStatus("Mic streaming");
+            _micStreamingCoroutine = StartCoroutine(MicStreamingLoop());
+        }
+
+        private IEnumerator RequestMicAuthorizationAndStart()
+        {
+            yield return Application.RequestUserAuthorization(UserAuthorization.Microphone);
+            if (!Application.HasUserAuthorization(UserAuthorization.Microphone))
+            {
+                AppendResponse("<color=#ff6666>[Mic] microphone permission denied</color>");
+                yield break;
+            }
+            StartMicStreaming();
+        }
+
+        private void StopMicStreaming()
+        {
+            if (_micStreamingCoroutine != null)
+            {
+                StopCoroutine(_micStreamingCoroutine);
+                _micStreamingCoroutine = null;
+            }
+            if (_micClip != null)
+            {
+                Microphone.End(_selectedMicDevice);
+                _micClip = null;
+            }
+            _micStreaming = false;
+            _micReadPosition = 0;
+            _micLevel = 0f;
+            UpdateMicButtonLabel();
+            UpdateMicStatusText();
+        }
+
+        private IEnumerator MicStreamingLoop()
+        {
+            var chunkSamples = Mathf.Max(1, _micSampleRate * _micChunkMs / 1000);
+            var sampleBuffer = new float[chunkSamples];
+            var wait = new WaitForSeconds(_micChunkMs / 1000f);
+
+            while (_micStreaming)
+            {
+                if (!VoiceSocketIsConnected() || _micClip == null)
+                {
+                    StopMicStreaming();
+                    yield break;
+                }
+
+                var micPosition = Microphone.GetPosition(_selectedMicDevice);
+                if (micPosition < 0)
+                {
+                    yield return wait;
+                    continue;
+                }
+
+                var available = SamplesAvailable(_micReadPosition, micPosition, _micClip.samples);
+                while (available >= chunkSamples)
+                {
+                    ReadMicSamples(sampleBuffer, _micReadPosition, chunkSamples);
+                    ApplyMicGain(sampleBuffer);
+                    UpdateMicLevel(sampleBuffer);
+                    _micReadPosition = (_micReadPosition + chunkSamples) % _micClip.samples;
+                    available -= chunkSamples;
+
+                    var seq = _voiceSeq++;
+                    var frame = BuildAudioChunkFrame(_voiceRequestId, seq, _micSampleRate, sampleBuffer);
+                    _ = SendAudioChunkAsync(frame, seq, sampleBuffer.Length);
+                }
+
+                yield return wait;
+            }
+        }
+
+        private async Task SendAudioChunkAsync(byte[] frame, uint seq, int sampleCount)
+        {
+            bool ok;
+            string error = null;
+            try
+            {
+                var voiceClient = VoiceSocket();
+                ok = voiceClient != null && await voiceClient.SendBinaryAsync(frame);
+            }
+            catch (Exception ex)
+            {
+                ok = false;
+                error = ex.Message;
+            }
+
+            UnityMainThreadDispatcher.Enqueue(() =>
+            {
+                if (ok)
+                {
+                    _micChunksSent++;
+                    _lastVoiceError = null;
+                    _lastMicSendTime = Time.time;
+                    if (Time.time - _lastMicDebugLogTime >= 2f)
+                    {
+                        Debug.Log($"[Mic] sent audio chunk request_id={_voiceRequestId} seq={seq} sample_rate={_micSampleRate} samples={sampleCount} bytes={frame.Length} sent={_micChunksSent}");
+                        _lastMicDebugLogTime = Time.time;
+                    }
+                }
+                else
+                {
+                    _micSendFailures++;
+                    if (!string.IsNullOrEmpty(error))
+                        _lastVoiceError = error;
+                    Debug.LogWarning($"[Mic] failed to send audio chunk request_id={_voiceRequestId} seq={seq} failures={_micSendFailures} error={_lastVoiceError}");
+                }
+                UpdateMicStatusText();
+            });
+        }
+
+        private static int SamplesAvailable(int readPosition, int writePosition, int clipSamples)
+        {
+            if (writePosition >= readPosition)
+                return writePosition - readPosition;
+            return clipSamples - readPosition + writePosition;
+        }
+
+        private void ReadMicSamples(float[] target, int startPosition, int count)
+        {
+            if (startPosition + count <= _micClip.samples)
+            {
+                _micClip.GetData(target, startPosition);
+                return;
+            }
+
+            var firstCount = _micClip.samples - startPosition;
+            var secondCount = count - firstCount;
+            var first = new float[firstCount];
+            var second = new float[secondCount];
+            _micClip.GetData(first, startPosition);
+            _micClip.GetData(second, 0);
+            Array.Copy(first, 0, target, 0, firstCount);
+            Array.Copy(second, 0, target, firstCount, secondCount);
+        }
+
+        private void ApplyMicGain(float[] samples)
+        {
+            var gain = Mathf.Clamp(_micGain, 0.1f, 8f);
+            if (Mathf.Approximately(gain, 1f))
+                return;
+
+            for (var i = 0; i < samples.Length; i++)
+                samples[i] = Mathf.Clamp(samples[i] * gain, -1f, 1f);
+        }
+
+        private byte[] BuildAudioChunkFrame(string requestId, uint seq, int sampleRate, float[] samples)
+        {
+            if (string.IsNullOrEmpty(requestId))
+                requestId = Guid.NewGuid().ToString();
+
+            var requestBytes = Encoding.UTF8.GetBytes(requestId);
+            var frame = new byte[4 + requestBytes.Length + 4 + 2 + samples.Length * 2];
+            var offset = 0;
+            WriteUInt32BE(frame, ref offset, (uint)requestBytes.Length);
+            Array.Copy(requestBytes, 0, frame, offset, requestBytes.Length);
+            offset += requestBytes.Length;
+            WriteUInt32BE(frame, ref offset, seq);
+            WriteUInt16BE(frame, ref offset, (ushort)sampleRate);
+
+            for (var i = 0; i < samples.Length; i++)
+            {
+                var sample = (short)Mathf.Clamp(Mathf.RoundToInt(samples[i] * 32767f), short.MinValue, short.MaxValue);
+                frame[offset++] = (byte)(sample & 0xff);
+                frame[offset++] = (byte)((sample >> 8) & 0xff);
+            }
+            return frame;
+        }
+
+        private void RotateVoiceRequest()
+        {
+            _voiceRequestId = Guid.NewGuid().ToString();
+            _voiceSeq = 0;
+        }
+
+        private void EnsureSelectedMicDevice()
+        {
+            var devices = Microphone.devices;
+            if (devices == null || devices.Length == 0)
+            {
+                _selectedMicDevice = null;
+                return;
+            }
+            if (string.IsNullOrEmpty(_selectedMicDevice) || Array.IndexOf(devices, _selectedMicDevice) < 0)
+                _selectedMicDevice = devices[0];
+        }
+
+        private void UpdateMicDeviceDropdownOptions()
+        {
+            if (_micDeviceDropdown == null)
+                return;
+
+            var devices = Microphone.devices;
+            _updatingMicDeviceDropdown = true;
+            _micDeviceDropdown.ClearOptions();
+
+            if (devices == null || devices.Length == 0)
+            {
+                _selectedMicDevice = null;
+                _micDeviceDropdown.AddOptions(new List<string> { "No microphone" });
+                _micDeviceDropdown.value = 0;
+                _micDeviceDropdown.interactable = false;
+                _micDeviceDropdown.RefreshShownValue();
+                _updatingMicDeviceDropdown = false;
+                UpdateMicStatusText();
+                return;
+            }
+
+            EnsureSelectedMicDevice();
+            _micDeviceDropdown.AddOptions(new List<string>(devices));
+            _micDeviceDropdown.value = Mathf.Max(0, Array.IndexOf(devices, _selectedMicDevice));
+            _micDeviceDropdown.interactable = true;
+            _micDeviceDropdown.RefreshShownValue();
+            _updatingMicDeviceDropdown = false;
+            UpdateMicStatusText();
+        }
+
+        private void UpdateMicLevel(float[] samples)
+        {
+            var peak = 0f;
+            for (var i = 0; i < samples.Length; i++)
+            {
+                var value = Mathf.Abs(samples[i]);
+                if (value > peak)
+                    peak = value;
+            }
+            _micLevel = Mathf.Lerp(_micLevel, Mathf.Clamp01(peak), 0.35f);
+            UpdateMicStatusText();
+        }
+
+        private void UpdateMicButtonLabel()
+        {
+            if (_micButton == null)
+                return;
+            var label = _micButton.GetComponentInChildren<Text>();
+            if (label != null)
+                label.text = _micStreaming ? "Mic On" : "Mic Off";
+        }
+
+        private void UpdateMicStatusText()
+        {
+            if (_micText == null)
+                return;
+
+            EnsureSelectedMicDevice();
+            var device = string.IsNullOrEmpty(_selectedMicDevice) ? "No mic" : _selectedMicDevice;
+            var bars = Mathf.Clamp(Mathf.RoundToInt(_micLevel * 12f), 0, 12);
+            var meter = new string('|', bars).PadRight(12, '.');
+            var age = _lastMicSendTime <= 0f ? "-" : $"{Mathf.Max(0f, Time.time - _lastMicSendTime):0.0}s";
+            var voiceState = VoiceSocketIsConnected() ? "voice:ok" : "voice:down";
+            var error = string.IsNullOrEmpty(_lastVoiceError) ? "" : $" | {_lastVoiceError}";
+            _micText.text = $"{(_micStreaming ? "Streaming" : "Stopped")} | {voiceState} | {device} | {meter} | gain:{_micGain:0.0} tx:{_micChunksSent} err:{_micSendFailures} last:{age}{error}";
+        }
+
+        private static void WriteUInt32BE(byte[] buffer, ref int offset, uint value)
+        {
+            buffer[offset++] = (byte)((value >> 24) & 0xff);
+            buffer[offset++] = (byte)((value >> 16) & 0xff);
+            buffer[offset++] = (byte)((value >> 8) & 0xff);
+            buffer[offset++] = (byte)(value & 0xff);
+        }
+
+        private static void WriteUInt16BE(byte[] buffer, ref int offset, ushort value)
+        {
+            buffer[offset++] = (byte)((value >> 8) & 0xff);
+            buffer[offset++] = (byte)(value & 0xff);
+        }
+
         /// <summary>
         /// 応答表示エリアにテキストを追記する。
         /// 古い行は自動的に削除される。
@@ -622,7 +1300,7 @@ namespace AICompanion
 
         private void EnsureUIReferences()
         {
-            if (_inputField != null && _sendButton != null && _responseText != null && _scrollRect != null)
+            if (_inputField != null && _sendButton != null && _micButton != null && _micDeviceDropdown != null && _micGainSlider != null && _cancelSpeechButton != null && _responseText != null && _scrollRect != null && _micText != null && _speechText != null)
                 return;
 
             var canvas = CreateCanvas();
@@ -645,12 +1323,27 @@ namespace AICompanion
 
             _statusText = CreateText("StatusText", root, "接続中...", 14, TextAnchor.MiddleLeft);
             _statusText.color = Color.gray;
-            SetRect(_statusText.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -104f), new Vector2(-24f, -76f));
+            SetRect(_statusText.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -104f), new Vector2(-128f, -76f));
+
+            _micButton = CreateLabeledButton(root, "MicButton", "Mic Off", new Color(0.18f, 0.52f, 0.36f, 1f));
+            SetRect(_micButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-112f, -108f), new Vector2(-24f, -76f));
+
+            _micText = CreateText("MicText", root, "Stopped | No mic | ............", 13, TextAnchor.MiddleLeft);
+            _micText.color = new Color(0.72f, 0.9f, 0.78f, 1f);
+            _micText.supportRichText = false;
+            _micText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            SetRect(_micText.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -140f), new Vector2(-220f, -112f));
+
+            _micDeviceDropdown = CreateDropdown(root, "MicDeviceDropdown");
+            SetRect(_micDeviceDropdown.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-208f, -144f), new Vector2(-24f, -112f));
+
+            _micGainSlider = CreateSlider(root, "MicGainSlider", 0.1f, 8f, _micGain);
+            SetRect(_micGainSlider.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-208f, -176f), new Vector2(-24f, -152f));
 
             var scrollObject = new GameObject("ScrollView", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             scrollObject.transform.SetParent(root, false);
             var scrollRectTransform = scrollObject.GetComponent<RectTransform>();
-            SetRect(scrollRectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(24f, 88f), new Vector2(-24f, -120f));
+            SetRect(scrollRectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(24f, 128f), new Vector2(-24f, -184f));
             var scrollImage = scrollObject.GetComponent<Image>();
             scrollImage.color = new Color(0.02f, 0.02f, 0.02f, 0.96f);
 
@@ -672,6 +1365,17 @@ namespace AICompanion
             _scrollRect.viewport = null;
             _scrollRect.horizontal = false;
             _scrollRect.vertical = true;
+
+            _speechText = CreateText("SpeechText", root, "", 15, TextAnchor.MiddleLeft);
+            _speechText.color = new Color(1f, 0.86f, 0.45f, 1f);
+            _speechText.supportRichText = false;
+            _speechText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            SetRect(_speechText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 82f), new Vector2(-152f, 120f));
+            _speechText.gameObject.SetActive(false);
+
+            _cancelSpeechButton = CreateLabeledButton(root, "CancelSpeechButton", "Cancel", new Color(0.78f, 0.22f, 0.18f, 1f));
+            SetRect(_cancelSpeechButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-136f, 82f), new Vector2(-24f, 120f));
+            _cancelSpeechButton.gameObject.SetActive(false);
 
             _inputField = CreateInputField(root);
             SetRect(_inputField.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 24f), new Vector2(-128f, 72f));
@@ -758,6 +1462,125 @@ namespace AICompanion
             var label = CreateText("Text", go.transform, "送信", 16, TextAnchor.MiddleCenter);
             SetRect(label.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             return go.GetComponent<Button>();
+        }
+
+        private static Button CreateLabeledButton(Transform parent, string name, string labelText, Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+            go.GetComponent<Image>().color = color;
+
+            var label = CreateText("Text", go.transform, labelText, 15, TextAnchor.MiddleCenter);
+            SetRect(label.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            return go.GetComponent<Button>();
+        }
+
+        private static Dropdown CreateDropdown(Transform parent, string name)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Dropdown));
+            go.transform.SetParent(parent, false);
+            var background = go.GetComponent<Image>();
+            background.color = Color.white;
+
+            var dropdown = go.GetComponent<Dropdown>();
+            dropdown.targetGraphic = background;
+
+            var label = CreateText("Label", go.transform, "", 13, TextAnchor.MiddleLeft);
+            label.color = Color.black;
+            label.horizontalOverflow = HorizontalWrapMode.Wrap;
+            SetRect(label.rectTransform, Vector2.zero, Vector2.one, new Vector2(10f, 2f), new Vector2(-28f, -2f));
+            dropdown.captionText = label;
+
+            var arrow = CreateText("Arrow", go.transform, "v", 13, TextAnchor.MiddleCenter);
+            arrow.color = Color.black;
+            SetRect(arrow.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-24f, 0f), Vector2.zero);
+
+            var template = new GameObject("Template", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            template.transform.SetParent(go.transform, false);
+            var templateRect = template.GetComponent<RectTransform>();
+            templateRect.pivot = new Vector2(0.5f, 1f);
+            SetRect(templateRect, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, -128f), Vector2.zero);
+            template.GetComponent<Image>().color = new Color(0.94f, 0.94f, 0.94f, 1f);
+
+            var viewport = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewport.transform.SetParent(template.transform, false);
+            var viewportRect = viewport.GetComponent<RectTransform>();
+            SetRect(viewportRect, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            viewport.GetComponent<Image>().color = Color.white;
+            viewport.GetComponent<Mask>().showMaskGraphic = false;
+
+            var content = CreateRect("Content", viewport.transform);
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = Vector2.one;
+            content.pivot = new Vector2(0.5f, 1f);
+            content.offsetMin = new Vector2(0f, -128f);
+            content.offsetMax = Vector2.zero;
+
+            var scrollRect = template.GetComponent<ScrollRect>();
+            scrollRect.content = content;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+
+            var item = new GameObject("Item", typeof(RectTransform), typeof(Image), typeof(Toggle));
+            item.transform.SetParent(content, false);
+            var itemRect = item.GetComponent<RectTransform>();
+            SetRect(itemRect, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -24f), Vector2.zero);
+            var itemImage = item.GetComponent<Image>();
+            itemImage.color = Color.white;
+
+            var itemToggle = item.GetComponent<Toggle>();
+            itemToggle.targetGraphic = itemImage;
+
+            var itemLabel = CreateText("Item Label", item.transform, "Option", 13, TextAnchor.MiddleLeft);
+            itemLabel.color = Color.black;
+            SetRect(itemLabel.rectTransform, Vector2.zero, Vector2.one, new Vector2(10f, 2f), new Vector2(-10f, -2f));
+
+            dropdown.template = templateRect;
+            dropdown.itemText = itemLabel;
+            dropdown.itemImage = itemImage;
+            template.SetActive(false);
+            return dropdown;
+        }
+
+        private static Slider CreateSlider(Transform parent, string name, float minValue, float maxValue, float value)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Slider));
+            go.transform.SetParent(parent, false);
+
+            var background = new GameObject("Background", typeof(RectTransform), typeof(Image));
+            background.transform.SetParent(go.transform, false);
+            var backgroundRect = background.GetComponent<RectTransform>();
+            SetRect(backgroundRect, Vector2.zero, Vector2.one, new Vector2(0f, 8f), new Vector2(0f, -8f));
+            background.GetComponent<Image>().color = new Color(0.22f, 0.22f, 0.22f, 1f);
+
+            var fillArea = CreateRect("Fill Area", go.transform);
+            SetRect(fillArea, Vector2.zero, Vector2.one, new Vector2(4f, 8f), new Vector2(-4f, -8f));
+
+            var fill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fill.transform.SetParent(fillArea, false);
+            var fillRect = fill.GetComponent<RectTransform>();
+            SetRect(fillRect, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            fill.GetComponent<Image>().color = new Color(0.36f, 0.74f, 0.52f, 1f);
+
+            var handleArea = CreateRect("Handle Slide Area", go.transform);
+            SetRect(handleArea, Vector2.zero, Vector2.one, new Vector2(8f, 0f), new Vector2(-8f, 0f));
+
+            var handle = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handle.transform.SetParent(handleArea, false);
+            var handleRect = handle.GetComponent<RectTransform>();
+            handleRect.sizeDelta = new Vector2(16f, 24f);
+            handle.GetComponent<Image>().color = Color.white;
+
+            var slider = go.GetComponent<Slider>();
+            slider.minValue = minValue;
+            slider.maxValue = maxValue;
+            slider.wholeNumbers = false;
+            slider.value = Mathf.Clamp(value, minValue, maxValue);
+            slider.fillRect = fillRect;
+            slider.handleRect = handleRect;
+            slider.targetGraphic = handle.GetComponent<Image>();
+            slider.direction = Slider.Direction.LeftToRight;
+            return slider;
         }
 
         private static void SetRect(RectTransform rect, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
@@ -887,12 +1710,17 @@ namespace AICompanion
 
         private void Update()
         {
-            lock (_queue)
+            while (true)
             {
-                while (_queue.Count > 0)
+                Action action = null;
+                lock (_queue)
                 {
-                    _queue.Dequeue()?.Invoke();
+                    if (_queue.Count > 0)
+                        action = _queue.Dequeue();
                 }
+                if (action == null)
+                    return;
+                Execute(action);
             }
         }
 
@@ -900,13 +1728,25 @@ namespace AICompanion
         {
             if (_mainThreadId == 0 || System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)
             {
-                action?.Invoke();
+                Execute(action);
                 return;
             }
 
             lock (_queue)
             {
                 _queue.Enqueue(action);
+            }
+        }
+
+        private static void Execute(Action action)
+        {
+            try
+            {
+                action?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[UnityMainThreadDispatcher] Action failed: {ex}");
             }
         }
 
