@@ -1,0 +1,35 @@
+{
+  "runtime": {
+    "listen_addr": "0.0.0.0:8090",
+    "request_timeout_ms": 30000
+  },
+  "websocket": {
+    "allowed_origins": ["http://192.168.12.107"]
+  },
+  "python_service": {
+    "base_url": "http://127.0.0.1:8092",
+    "command": "PYTHONPATH=./src python3 -c \"from local_ai_companion.server import run_server; from local_ai_companion.config import load_config; cfg = load_config('config.json'); run_server(cfg, host='127.0.0.1', port=8092)\"",
+    "ready_timeout_ms": 10000,
+    "shutdown_timeout_ms": 5000
+  },
+  "ollama": {
+    "enabled": true,
+    "base_url": "http://192.168.12.107:11434",
+    "model": "g4v100",
+    "timeout_ms": 60000
+  },
+  "agent": {
+    "enabled": true,
+    "max_tool_loops": 5,
+    "allowed_tools": ["web_search", "web_fetch", "audio_control", "set_state"],
+    "timezone": "Asia/Tokyo",
+    "locale": "ja-JP",
+    "system_prompt": "あなたは local-ai-companion です。日本語で応答してください。"
+  },
+  "voice_input": {
+    "enabled": true,
+    "vad_url": "http://127.0.0.1:8092",
+    "stt_server_url": "http://192.168.12.107:8093/v1/transcribe",
+    "stt_timeout_ms": 10000
+  }
+}
