@@ -10,6 +10,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"os/exec"
 	"time"
 )
 
@@ -95,8 +97,32 @@ func (c *FasterWhisperClient) Transcribe(ctx context.Context, pcmData []byte, sa
 	return &Result{Text: text, Duration: sttResp.Duration}, nil
 }
 
-// pcmToWAV は raw PCM int16 モノラルデータを WAV 形式に変換します。
+// pcmToWAV は raw PCM int16 モノラルデータを ffmpeg で正規 WAV に変換します。
 func pcmToWAV(pcmData []byte, sampleRate int) ([]byte, error) {
+	if _, err := exec.LookPath("ffmpeg"); err == nil {
+		return pcmToWAVFFmpeg(pcmData, sampleRate)
+	}
+	// Fallback to Go implementation if ffmpeg not available
+	return pcmToWAVGo(pcmData, sampleRate)
+}
+
+func pcmToWAVFFmpeg(pcmData []byte, sampleRate int) ([]byte, error) {
+	cmd := exec.Command("ffmpeg",
+		"-f", "s16le", "-ar", fmt.Sprint(sampleRate), "-ac", "1",
+		"-i", "pipe:0",
+		"-f", "wav", "pipe:1",
+	)
+	cmd.Stdin = bytes.NewReader(pcmData)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
+func pcmToWAVGo(pcmData []byte, sampleRate int) ([]byte, error) {
 	if len(pcmData)%2 != 0 {
 		return nil, fmt.Errorf("pcm data length must be even (int16 samples), got %d bytes", len(pcmData))
 	}
@@ -133,15 +159,16 @@ func buildMultipart(wavData []byte, language string) (body []byte, contentType s
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	audioPart, err := writer.CreateFormFile("file", "audio.wav")
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="audio.wav"`)
+	h.Set("Content-Type", "audio/wav")
+	audioPart, err := writer.CreatePart(h)
 	if err != nil {
 		return nil, "", err
 	}
 	audioPart.Write(wavData)
 
 	writer.WriteField("language", language)
-
 	writer.Close()
-
 	return buf.Bytes(), writer.FormDataContentType(), nil
 }

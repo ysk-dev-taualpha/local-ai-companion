@@ -85,7 +85,7 @@ def load_prompt_text(path):
     if not path: return ""
     with open(path,"r",encoding="utf-8") as f: return f.read().strip()
 
-DEFAULT_SYSTEM_PROMPT = "あなたは常駐型AIアシスタントです。応答は必ずJSON形式で返してください。"
+DEFAULT_SYSTEM_PROMPT = "あなたは常駐型AIアシスタントです。応答は必ず以下のJSON形式で返してください:\n{\"text\": \"返答本文\", \"emotion\": \"neutral\", \"motion\": \"nod\", \"speak_style\": \"normal\", \"interruptible\": true}\nemotion: neutral, happy, sad, surprised, thinking\nmotion: nod, idle, wave\nspeak_style: normal, soft, energetic"
 DEFAULT_RESPONSE_FORMAT = "応答はJSONオブジェクトのみを返してください。"
 
 def build_prompts(config):
