@@ -81,6 +81,7 @@ type WebSocketHub struct {
 	stateMachine     *state.StateMachine
 	agentLoop        *agent.Loop
 	voicePipeline    *VoicePipeline
+	pendingCancels   map[string]context.CancelFunc
 	requestTimeoutMs int
 	upgrader         websocket.Upgrader
 }
@@ -93,6 +94,7 @@ func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMa
 		stateMachine:     stateMachine,
 		agentLoop:        agentLoop,
 		voicePipeline:    vp,
+		pendingCancels:   make(map[string]context.CancelFunc),
 		requestTimeoutMs: requestTimeoutMs,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: buildCheckOrigin(allowedOrigins),
@@ -141,6 +143,8 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			} else {
 				h.handleTextMessage(conn, msg)
 			}
+		case "cancel_speech":
+			h.handleCancelSpeech(msg.RequestID)
 		default:
 			h.handleEcho(conn, msg)
 		}
@@ -279,6 +283,19 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		h.stateMachine.Reset()
 	}
 	h.broadcastState("IDLE")
+}
+
+func (h *WebSocketHub) handleCancelSpeech(requestID string) {
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
+
+	if cancel, ok := h.pendingCancels[requestID]; ok {
+		cancel()
+		delete(h.pendingCancels, requestID)
+		log.Printf("voice: speech cancelled: request_id=%s", requestID)
+		h.broadcastState("IDLE")
+		h.stateMachine.Reset()
+	}
 }
 
 func (h *WebSocketHub) handleEcho(conn *websocket.Conn, msg WSMessage) {
