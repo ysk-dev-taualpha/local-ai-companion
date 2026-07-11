@@ -159,33 +159,14 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID string,
 		delete(vp.hub.pendingCancels, requestID)
 		vp.hub.stateMu.Unlock()
 		log.Printf("voice: sending text to agent: %q", result.Text)
-		// State is already THINKING, skip the LISTENING→THINKING transition
-		// by calling agent loop directly instead of handleTextMessageAgent
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel2()
-		
+		// Reset state so handleTextMessageAgent can transition from IDLE
 		vp.hub.stateMu.Lock()
-		responseText, err := vp.hub.agentLoop.Run(ctx2, result.Text, requestID)
-		if err != nil {
-			vp.hub.stateMu.Unlock()
-			log.Printf("voice: agent error: %v", err)
-			vp.hub.sendError(conn, requestID, err.Error())
-			vp.resetState()
-			return
-		}
+		vp.hub.stateMachine.Reset()
+		vp.hub.broadcastState("IDLE")
 		vp.hub.stateMu.Unlock()
-		
-		log.Printf("voice: agent response: %q", responseText)
-		
-		conn.WriteJSON(WSAIResponse{
-			Type: "ai_response", RequestID: requestID, Text: responseText,
-		})
-		
-		if vp.hub.ttsClient != nil && responseText != "" {
-			// TTS if available
-		}
-		
-		vp.resetState()
+
+		msg := WSMessage{Type: "text", Payload: result.Text, RequestID: requestID}
+		vp.hub.handleTextMessageAgent(conn, msg)
 	}
 }
 
