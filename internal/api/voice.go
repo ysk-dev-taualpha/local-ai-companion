@@ -105,6 +105,9 @@ func (vp *VoicePipeline) processChunk(conn *websocket.Conn, chunk *AudioChunk) {
 
 	case "speech_end":
 		go vp.handleSpeechEnd(conn, chunk.RequestID, resp.AudioWAV)
+
+	default:
+		log.Printf("voice: VAD event: %s", resp.Event)
 	}
 }
 
