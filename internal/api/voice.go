@@ -104,7 +104,7 @@ func (vp *VoicePipeline) processChunk(conn *websocket.Conn, chunk *AudioChunk) {
 		vp.hub.stateMu.Unlock()
 
 	case "speech_end":
-		vp.handleSpeechEnd(conn, chunk.RequestID, resp.AudioWAV)
+		go vp.handleSpeechEnd(conn, chunk.RequestID, resp.AudioWAV)
 	}
 }
 
@@ -191,12 +191,27 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID, wavBas
 		Cancelable: true,
 	})
 
-	msg := WSMessage{
-		Type:      "text",
-		Payload:   result.Text,
-		RequestID: requestID,
+	// Wait 3 seconds for possible cancel, then proceed.
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
+	vp.hub.stateMu.Lock()
+	vp.hub.pendingCancels[requestID] = cancelFunc
+	vp.hub.stateMu.Unlock()
+
+	select {
+	case <-cancelCtx.Done():
+		log.Printf("voice: speech cancelled: request_id=%s", requestID)
+	case <-time.After(3 * time.Second):
+		vp.hub.stateMu.Lock()
+		delete(vp.hub.pendingCancels, requestID)
+		vp.hub.stateMu.Unlock()
+
+		msg := WSMessage{
+			Type:      "text",
+			Payload:   result.Text,
+			RequestID: requestID,
+		}
+		vp.hub.handleTextMessageAgent(conn, msg)
 	}
-	vp.hub.handleTextMessageAgent(conn, msg)
 }
 
 func (ac *AudioChunk) pcmBytes() []byte {
