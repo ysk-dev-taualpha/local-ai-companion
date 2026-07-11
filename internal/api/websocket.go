@@ -125,7 +125,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Binary frame → audio chunk
+		// Binary frame -> audio chunk
 		if msgType == websocket.BinaryMessage {
 			h.handleAudioChunk(conn, msgBytes)
 			continue
@@ -193,14 +193,17 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	}
 	h.broadcastState("SPEAKING")
 
+	assistant := parseAssistantResponse(responseText)
 	aiResp := WSAIResponse{
 		Type:      "ai_response",
 		RequestID: requestID,
-		Text:      responseText,
+		Assistant: &assistant,
+		Text:      assistant.Text,
 	}
+	log.Printf("websocket: sending ai_response: request_id=%s text_len=%d", requestID, len(responseText))
 
-	if h.ttsClient != nil && responseText != "" {
-		audioData, ttsErr := h.ttsClient.Speak(responseText)
+	if h.ttsClient != nil && assistant.Text != "" {
+		audioData, ttsErr := h.ttsClient.Speak(assistant.Text)
 		if ttsErr != nil {
 			log.Printf("websocket: tts synthesis failed: %v", ttsErr)
 		} else {
@@ -283,6 +286,29 @@ func (h *WebSocketHub) handleTextMessage(conn *websocket.Conn, msg WSMessage) {
 		h.stateMachine.Reset()
 	}
 	h.broadcastState("IDLE")
+}
+
+func parseAssistantResponse(raw string) client.AssistantMessage {
+	assistant := client.AssistantMessage{
+		Text:          raw,
+		SpeakStyle:    "normal",
+		Interruptible: true,
+	}
+	if raw == "" {
+		return assistant
+	}
+
+	var parsed client.AssistantMessage
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return assistant
+	}
+	if parsed.Text == "" {
+		return assistant
+	}
+	if parsed.SpeakStyle == "" {
+		parsed.SpeakStyle = "normal"
+	}
+	return parsed
 }
 
 func (h *WebSocketHub) handleCancelSpeech(requestID string) {

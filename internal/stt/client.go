@@ -1,4 +1,3 @@
-// Package stt は faster-whisper を使用した音声認識 (Speech-to-Text) 機能を提供します。
 package stt
 
 import (
@@ -10,30 +9,24 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
-	"os/exec"
 	"time"
 )
 
-// Result は音声認識の結果を表します。
 type Result struct {
 	Text     string  `json:"text"`
 	Duration float64 `json:"duration,omitempty"`
 	Error    string  `json:"error,omitempty"`
 }
 
-// STTClient は音声認識エンジンの共通インターフェースです。
 type STTClient interface {
 	Transcribe(ctx context.Context, pcmData []byte, sampleRate int, language string) (*Result, error)
 }
 
-// FasterWhisperClient は faster-whisper HTTP サーバーのクライアントです。
 type FasterWhisperClient struct {
 	serverURL string
 	client    *http.Client
 }
 
-// NewFasterWhisper は新しい FasterWhisperClient を生成します。
 func NewFasterWhisper(serverURL string, timeout time.Duration) *FasterWhisperClient {
 	return &FasterWhisperClient{
 		serverURL: serverURL,
@@ -41,15 +34,18 @@ func NewFasterWhisper(serverURL string, timeout time.Duration) *FasterWhisperCli
 	}
 }
 
-// Transcribe は PCM 音声データをテキストに変換します。
 func (c *FasterWhisperClient) Transcribe(ctx context.Context, pcmData []byte, sampleRate int, language string) (*Result, error) {
 	if len(pcmData) == 0 {
 		return &Result{Text: "", Error: "empty audio"}, nil
 	}
 
-	wavData, err := pcmToWAV(pcmData, sampleRate)
-	if err != nil {
-		return nil, fmt.Errorf("stt: pcm to wav conversion failed: %w", err)
+	wavData := pcmData
+	if !isWAV(pcmData) {
+		var err error
+		wavData, err = pcmToWAV(pcmData, sampleRate)
+		if err != nil {
+			return nil, fmt.Errorf("stt: pcm to wav conversion failed: %w", err)
+		}
 	}
 
 	body, contentType, err := buildMultipart(wavData, language)
@@ -97,45 +93,22 @@ func (c *FasterWhisperClient) Transcribe(ctx context.Context, pcmData []byte, sa
 	return &Result{Text: text, Duration: sttResp.Duration}, nil
 }
 
-// pcmToWAV は raw PCM int16 モノラルデータを ffmpeg で正規 WAV に変換します。
+func isWAV(data []byte) bool {
+	return len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WAVE"
+}
+
 func pcmToWAV(pcmData []byte, sampleRate int) ([]byte, error) {
-	if _, err := exec.LookPath("ffmpeg"); err == nil {
-		return pcmToWAVFFmpeg(pcmData, sampleRate)
-	}
-	// Fallback to Go implementation if ffmpeg not available
-	return pcmToWAVGo(pcmData, sampleRate)
-}
-
-func pcmToWAVFFmpeg(pcmData []byte, sampleRate int) ([]byte, error) {
-	cmd := exec.Command("ffmpeg",
-		"-f", "s16le", "-ar", fmt.Sprint(sampleRate), "-ac", "1",
-		"-i", "pipe:0",
-		"-f", "wav", "pipe:1",
-	)
-	cmd.Stdin = bytes.NewReader(pcmData)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %w", err)
-	}
-	return out.Bytes(), nil
-}
-
-func pcmToWAVGo(pcmData []byte, sampleRate int) ([]byte, error) {
 	if len(pcmData)%2 != 0 {
 		return nil, fmt.Errorf("pcm data length must be even (int16 samples), got %d bytes", len(pcmData))
 	}
 
 	var buf bytes.Buffer
 
-	// RIFF header
 	buf.WriteString("RIFF")
 	dataSize := uint32(36 + len(pcmData))
 	binary.Write(&buf, binary.LittleEndian, dataSize)
 	buf.WriteString("WAVE")
 
-	// fmt chunk
 	buf.WriteString("fmt ")
 	binary.Write(&buf, binary.LittleEndian, uint32(16))
 	binary.Write(&buf, binary.LittleEndian, uint16(1))
@@ -146,7 +119,6 @@ func pcmToWAVGo(pcmData []byte, sampleRate int) ([]byte, error) {
 	binary.Write(&buf, binary.LittleEndian, uint16(2))
 	binary.Write(&buf, binary.LittleEndian, uint16(16))
 
-	// data chunk
 	buf.WriteString("data")
 	binary.Write(&buf, binary.LittleEndian, uint32(len(pcmData)))
 	buf.Write(pcmData)
@@ -154,21 +126,19 @@ func pcmToWAVGo(pcmData []byte, sampleRate int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// buildMultipart は WAV データと language を含む multipart/form-data リクエストボディを構築します。
 func buildMultipart(wavData []byte, language string) (body []byte, contentType string, err error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="file"; filename="audio.wav"`)
-	h.Set("Content-Type", "audio/wav")
-	audioPart, err := writer.CreatePart(h)
+	audioPart, err := writer.CreateFormFile("file", "audio.wav")
 	if err != nil {
 		return nil, "", err
 	}
 	audioPart.Write(wavData)
 
 	writer.WriteField("language", language)
+
 	writer.Close()
+
 	return buf.Bytes(), writer.FormDataContentType(), nil
 }
