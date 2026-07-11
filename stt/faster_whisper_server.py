@@ -29,8 +29,9 @@ logger = logging.getLogger("faster_whisper_server")
 
 _model = None
 _model_name: str = "Systran/faster-whisper-small"
-_device: str = "cpu"
-_compute_type: str = "int8"
+_device: str = "cuda"
+_device_index: int = 1
+_compute_type: str = "float16"
 
 
 def load_model() -> None:
@@ -53,6 +54,7 @@ def load_model() -> None:
     _model = WhisperModel(
         _model_name,
         device=_device,
+        device_index=_device_index,
         compute_type=_compute_type,
     )
     logger.info("Model loaded successfully — ready for transcription.")
