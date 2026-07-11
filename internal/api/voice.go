@@ -80,8 +80,10 @@ func (vp *VoicePipeline) processChunk(conn *websocket.Conn, chunk *AudioChunk) {
 		if maxAmp >= vp.speechThresh {
 			vp.energySpeech = true
 			vp.silenceCount = 0
+			// Only transition to LISTENING when IDLE (not busy with TTS/LLM)
 			vp.hub.stateMu.Lock()
-			if vp.hub.stateMachine.IsSpeaking() {
+			cur := vp.hub.stateMachine.Current()
+			if cur != state.IDLE {
 				vp.hub.stateMu.Unlock()
 				return
 			}
@@ -129,22 +131,26 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID string,
 	if err != nil {
 		log.Printf("voice: STT error: %v", err)
 		vp.hub.sendError(conn, requestID, fmt.Sprintf("STT error: %v", err))
-		vp.resetState()
+		vp.hub.resetAndBroadcastIdle()
 		return
 	}
 	if result.Error != "" {
 		log.Printf("voice: STT result error: %s", result.Error)
 		vp.hub.sendError(conn, requestID, result.Error)
-		vp.resetState()
+		vp.hub.resetAndBroadcastIdle()
 		return
 	}
 
 	log.Printf("voice: STT result: %q", result.Text)
 
-	vp.hub.writeJSON(conn, WSSpeechRecognized{
-		Type: "speech_recognized", RequestID: requestID,
-		Text: result.Text, Cancelable: true,
-	})
+	if err := vp.hub.writeJSON(conn, WSSpeechRecognized{
+		Type:       "speech_recognized",
+		RequestID:  requestID,
+		Text:       result.Text,
+		Cancelable: true,
+	}); err != nil {
+		log.Printf("voice: failed to write speech_recognized: %v", err)
+	}
 
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	vp.hub.stateMu.Lock()
@@ -158,23 +164,9 @@ func (vp *VoicePipeline) handleSpeechEnd(conn *websocket.Conn, requestID string,
 		vp.hub.stateMu.Lock()
 		delete(vp.hub.pendingCancels, requestID)
 		vp.hub.stateMu.Unlock()
-		log.Printf("voice: sending text to agent: %q", result.Text)
-		// Reset state so handleTextMessageAgent can transition from IDLE
-		vp.hub.stateMu.Lock()
-		vp.hub.stateMachine.Reset()
-		vp.hub.broadcastState("IDLE")
-		vp.hub.stateMu.Unlock()
-
-		msg := WSMessage{Type: "text", Payload: result.Text, RequestID: requestID}
-		vp.hub.handleTextMessageAgent(conn, msg)
+		log.Printf("voice: sending text to voice agent: %q", result.Text)
+		vp.hub.HandleVoiceTextAgent(conn, result.Text, requestID)
 	}
-}
-
-func (vp *VoicePipeline) resetState() {
-	vp.hub.stateMu.Lock()
-	vp.hub.broadcastState("IDLE")
-	vp.hub.stateMachine.Reset()
-	vp.hub.stateMu.Unlock()
 }
 
 func (ac *AudioChunk) pcmBytes() []byte {
