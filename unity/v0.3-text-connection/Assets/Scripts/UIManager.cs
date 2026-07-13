@@ -142,6 +142,7 @@ namespace AICompanion
 
         private WebSocketClient _wsClient;
         private WebSocketClient _voiceWsClient;
+        private const float ResponseScrollPadding = 16f;
         private readonly List<string> _responseLines = new();
         private readonly Queue<AudioClip> _audioQueue = new();
         private string _currentState = "UNKNOWN";
@@ -1282,6 +1283,7 @@ namespace AICompanion
             if (_responseText != null)
             {
                 _responseText.text = string.Join("\n", _responseLines);
+                UpdateResponseScrollContent();
             }
 
             // 自動スクロール
@@ -1290,6 +1292,26 @@ namespace AICompanion
                 Canvas.ForceUpdateCanvases();
                 _scrollRect.verticalNormalizedPosition = 0f;
             }
+        }
+
+        private void UpdateResponseScrollContent()
+        {
+            if (_responseText == null || _scrollRect == null || _scrollRect.content == null)
+                return;
+
+            var viewport = _scrollRect.viewport != null
+                ? _scrollRect.viewport
+                : _scrollRect.GetComponent<RectTransform>();
+            var viewportHeight = viewport != null ? viewport.rect.height : 0f;
+            var textHeight = _responseText.preferredHeight;
+            var contentHeight = Mathf.Max(viewportHeight, textHeight + (ResponseScrollPadding * 2f));
+
+            _responseText.verticalOverflow = VerticalWrapMode.Overflow;
+            _scrollRect.content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, contentHeight);
+
+            var textRect = _responseText.rectTransform;
+            textRect.offsetMin = new Vector2(0f, ResponseScrollPadding);
+            textRect.offsetMax = new Vector2(0f, -ResponseScrollPadding);
         }
 
         private void UpdateStatus(string status)
@@ -1340,29 +1362,30 @@ namespace AICompanion
             _micGainSlider = CreateSlider(root, "MicGainSlider", 0.1f, 8f, _micGain);
             SetRect(_micGainSlider.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-208f, -176f), new Vector2(-24f, -152f));
 
-            var scrollObject = new GameObject("ScrollView", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            var scrollObject = new GameObject("ScrollView", typeof(RectTransform), typeof(Image), typeof(Mask), typeof(ScrollRect));
             scrollObject.transform.SetParent(root, false);
             var scrollRectTransform = scrollObject.GetComponent<RectTransform>();
             SetRect(scrollRectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(24f, 128f), new Vector2(-24f, -184f));
             var scrollImage = scrollObject.GetComponent<Image>();
             scrollImage.color = new Color(0.02f, 0.02f, 0.02f, 0.96f);
+            scrollObject.GetComponent<Mask>().showMaskGraphic = true;
 
             var content = CreateRect("Content", scrollRectTransform);
-            content.anchorMin = Vector2.zero;
+            content.anchorMin = new Vector2(0f, 1f);
             content.anchorMax = Vector2.one;
             content.pivot = new Vector2(0.5f, 1f);
-            content.offsetMin = new Vector2(16f, 12f);
-            content.offsetMax = new Vector2(-16f, -12f);
+            content.offsetMin = new Vector2(ResponseScrollPadding, 0f);
+            content.offsetMax = new Vector2(-ResponseScrollPadding, 0f);
 
             _responseText = CreateText("ResponseText", content, "", 16, TextAnchor.UpperLeft);
             _responseText.supportRichText = true;
             _responseText.horizontalOverflow = HorizontalWrapMode.Wrap;
-            _responseText.verticalOverflow = VerticalWrapMode.Truncate;
-            SetRect(_responseText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            _responseText.verticalOverflow = VerticalWrapMode.Overflow;
+            SetRect(_responseText.rectTransform, Vector2.zero, Vector2.one, new Vector2(0f, ResponseScrollPadding), new Vector2(0f, -ResponseScrollPadding));
 
             _scrollRect = scrollObject.GetComponent<ScrollRect>();
             _scrollRect.content = content;
-            _scrollRect.viewport = null;
+            _scrollRect.viewport = scrollRectTransform;
             _scrollRect.horizontal = false;
             _scrollRect.vertical = true;
 
