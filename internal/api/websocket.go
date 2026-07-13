@@ -296,7 +296,7 @@ func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string
 	for _, m := range history {
 		messages = append(messages, msg{m.Role, m.Content})
 	}
-	messages = append(messages, msg{"user", prompt})
+	messages = append(messages, msg{"user", fmt.Sprintf("[現在日時: %s]\n%s", time.Now().Format("2006年1月2日 15時04分"), prompt)})
 
 	// First call: with tools
 	tools := `[{"type":"function","function":{"name":"search_the_web","description":"Search the web for current information","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}}}]`
