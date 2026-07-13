@@ -21,9 +21,10 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
 
-const voiceSystemPrompt = `あなたは常駐型AIアシスタントです。応答は短く簡潔に、必ず以下のJSON形式で返してください:
+const voiceSystemPrompt = `あなたは常駐型AIアシスタントです。応答は短く簡潔に3文以内で、必ず以下のJSON形式で返してください:
 {"text": "返答本文", "emotion": "neutral", "motion": "nod", "speak_style": "normal", "interruptible": true}
-emotion: neutral/happy/sad/surprised/thinking, motion: nod/idle/wave`
+emotion: neutral/happy/sad/surprised/thinking, motion: nod/idle/wave
+Web検索結果を要約する場合は特に簡潔にまとめてください。`
 
 func buildCheckOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	if len(allowedOrigins) == 0 {
