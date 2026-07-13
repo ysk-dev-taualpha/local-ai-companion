@@ -52,7 +52,7 @@ func newTestHub(t *testing.T) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, nil, state.New(nil), 5000, nil, nil, nil)
+	return NewWebSocketHub(nil, mock, nil, state.New(nil), 5000, nil, nil, nil)
 }
 
 func TestHandleWS_SendReceive(t *testing.T) {
@@ -465,7 +465,7 @@ func testCheckOriginHub(t *testing.T, allowedOrigins []string) *WebSocketHub {
 			},
 		},
 	}
-	return NewWebSocketHub(mock, nil, state.New(nil), 5000, allowedOrigins, nil, nil)
+	return NewWebSocketHub(nil, mock, nil, state.New(nil), 5000, allowedOrigins, nil, nil)
 }
 
 func TestHandleWS_CheckOrigin_AllowedOrigin(t *testing.T) {

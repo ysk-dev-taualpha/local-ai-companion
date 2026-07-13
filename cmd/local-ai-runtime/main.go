@@ -16,6 +16,7 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/config"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/logging"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/memory"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/pythonservice"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/stt"
@@ -79,7 +80,15 @@ func main() {
 		logger.Info("Voice input enabled: vad=%s, stt=%s", cfg.VoiceInput.VADURL, cfg.VoiceInput.STTServerURL)
 	}
 
-	wsHub := api.NewWebSocketHub(pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop, vp)
+	memStore, err := memory.NewStore("file:conversation.db", 10)
+	if err != nil {
+		logger.Error("memory store unavailable: %v", err)
+	}
+	if memStore != nil {
+		_ = memStore.CleanOldSessions(24 * time.Hour)
+	}
+
+	wsHub := api.NewWebSocketHub(memStore, pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop, vp)
 	if vp != nil {
 		vp.SetHub(wsHub)
 	}

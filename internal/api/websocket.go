@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/agent"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/client"
+	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/memory"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
@@ -82,7 +83,8 @@ type WSStateNotification struct {
 }
 
 type wsConnState struct {
-	writeMu sync.Mutex
+	writeMu   sync.Mutex
+	sessionID string
 }
 
 type WebSocketHub struct {
@@ -90,6 +92,7 @@ type WebSocketHub struct {
 	stateMu          sync.Mutex
 	agentMu          sync.Mutex
 	conns            map[*websocket.Conn]*wsConnState
+	memoryStore      *memory.Store
 	pythonClient     PythonClient
 	ttsClient        tts.TTSClient
 	stateMachine     *state.StateMachine
@@ -100,9 +103,10 @@ type WebSocketHub struct {
 	upgrader         websocket.Upgrader
 }
 
-func NewWebSocketHub(pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop, vp *VoicePipeline) *WebSocketHub {
+func NewWebSocketHub(memStore *memory.Store, pythonClient PythonClient, ttsClient tts.TTSClient, stateMachine *state.StateMachine, requestTimeoutMs int, allowedOrigins []string, agentLoop *agent.Loop, vp *VoicePipeline) *WebSocketHub {
 	return &WebSocketHub{
 		conns:            make(map[*websocket.Conn]*wsConnState),
+		memoryStore:      memStore,
 		pythonClient:     pythonClient,
 		ttsClient:        ttsClient,
 		stateMachine:     stateMachine,
@@ -123,7 +127,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.mu.Lock()
-	h.conns[conn] = &wsConnState{}
+	h.conns[conn] = &wsConnState{sessionID: newRequestID()}
 	h.mu.Unlock()
 
 	defer func() {
@@ -164,6 +168,16 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *WebSocketHub) sessionID(conn *websocket.Conn) string {
+	h.mu.RLock()
+	cs := h.conns[conn]
+	h.mu.RUnlock()
+	if cs == nil {
+		return "default"
+	}
+	return cs.sessionID
+}
+
 func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessage) {
 	requestID := msg.RequestID
 	if requestID == "" {
@@ -190,7 +204,7 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	h.broadcastState("THINKING")
 	h.stateMu.Unlock()
 
-	responseText := h.callOllama(msg.Payload, "")
+	responseText := h.callOllama(h.sessionID(conn), msg.Payload, "")
 	if responseText == "" {
 		h.sendError(conn, requestID, "LLM returned empty response")
 		h.resetAndBroadcastIdle()
@@ -229,7 +243,7 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
 
-	responseText := h.callOllama(text, voiceSystemPrompt)
+	responseText := h.callOllama(h.sessionID(conn), text, voiceSystemPrompt)
 	if responseText == "" {
 		h.sendError(conn, requestID, "LLM returned empty response")
 		h.resetAndBroadcastIdle()
@@ -264,16 +278,27 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 	h.stateMu.Unlock()
 }
 
-func (h *WebSocketHub) callOllama(prompt, systemPrompt string) string {
-	var messages string
-	if systemPrompt != "" {
-		messages = fmt.Sprintf(`[{"role":"system","content":"%s"},{"role":"user","content":"%s"}]`,
-			escapeJSON(systemPrompt), escapeJSON(prompt))
-	} else {
-		messages = fmt.Sprintf(`[{"role":"user","content":"%s"}]`, escapeJSON(prompt))
-	}
+func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string {
+	// Load conversation history
+	history, _ := h.memoryStore.LoadHistory(sessionID)
+	h.memoryStore.SaveMessage(sessionID, "user", prompt)
 
-	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, messages)
+	// Build messages: system + history + current prompt
+	type msg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	messages := []msg{}
+	if systemPrompt != "" {
+		messages = append(messages, msg{"system", systemPrompt})
+	}
+	for _, m := range history {
+		messages = append(messages, msg{m.Role, m.Content})
+	}
+	messages = append(messages, msg{"user", prompt})
+
+	msgsJSON, _ := json.Marshal(messages)
+	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, string(msgsJSON))
 	req, _ := http.NewRequest("POST", "http://192.168.12.107:11434/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -300,7 +325,10 @@ func (h *WebSocketHub) callOllama(prompt, systemPrompt string) string {
 		log.Printf("ollama: parse failed: %v body=%s", err, string(respBody[:min(200, len(respBody))]))
 		return ""
 	}
-	return result.Choices[0].Message.Content
+	content := result.Choices[0].Message.Content
+	// Save assistant response to history
+	h.memoryStore.SaveMessage(sessionID, "assistant", content)
+	return content
 }
 
 func escapeJSON(s string) string {
