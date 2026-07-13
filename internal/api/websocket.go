@@ -283,7 +283,7 @@ func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string
 	history, _ := h.memoryStore.LoadHistory(sessionID)
 	h.memoryStore.SaveMessage(sessionID, "user", prompt)
 
-	// Build messages: system + history + current prompt
+	// Build messages
 	type msg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -297,8 +297,44 @@ func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string
 	}
 	messages = append(messages, msg{"user", prompt})
 
+	// First call: with tools
+	tools := `[{"type":"function","function":{"name":"search_the_web","description":"Search the web for current information","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}}}]`
+
 	msgsJSON, _ := json.Marshal(messages)
-	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, string(msgsJSON))
+	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"tools":%s,"stream":false}`, string(msgsJSON), tools)
+	
+	result := h.ollamaRequest(body)
+	if result.content == "" {
+		return ""
+	}
+
+	// Check for tool call
+	if result.toolName == "search_the_web" {
+		searchResult := webSearch(result.toolArgs)
+		if searchResult == "" {
+			return result.content
+		}
+		// Feed tool result back
+		messages = append(messages, msg{"assistant", ""}) // placeholder
+		messages = append(messages, msg{"tool", fmt.Sprintf(`{"query":"%s","results":"%s"}`, escapeJSON(result.toolArgs), escapeJSON(searchResult))})
+		msgsJSON2, _ := json.Marshal(messages)
+		body2 := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, string(msgsJSON2))
+		content := h.ollamaRequest(body2).content
+		h.memoryStore.SaveMessage(sessionID, "assistant", content)
+		return content
+	}
+
+	h.memoryStore.SaveMessage(sessionID, "assistant", result.content)
+	return result.content
+}
+
+type ollamaResult struct {
+	content  string
+	toolName string
+	toolArgs string
+}
+
+func (h *WebSocketHub) ollamaRequest(body string) ollamaResult {
 	req, _ := http.NewRequest("POST", "http://192.168.12.107:11434/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -309,26 +345,94 @@ func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("ollama: request failed: %v", err)
+		return ollamaResult{}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	var r struct {
+		Choices []struct {
+			Message struct {
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &r); err != nil || len(r.Choices) == 0 {
+		log.Printf("ollama: parse failed: %v body=%s", err, string(respBody[:min(200, len(respBody))]))
+		return ollamaResult{}
+	}
+
+	or := ollamaResult{content: r.Choices[0].Message.Content}
+	if len(r.Choices[0].Message.ToolCalls) > 0 {
+		tc := r.Choices[0].Message.ToolCalls[0]
+		or.toolName = tc.Function.Name
+		or.toolArgs = tc.Function.Arguments
+	}
+	return or
+}
+
+func webSearch(query string) string {
+	if query == "" {
+		return ""
+	}
+	encoded := url.QueryEscape(query)
+	req, _ := http.NewRequest("GET", "https://html.duckduckgo.com/html/?q="+encoded, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
 		return ""
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32768))
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32768))
+	// Simple extraction: find result snippets
+	html := string(body)
+	var results []string
+	for i := 0; i < 3; i++ {
+		snipStart := strings.Index(html, "result__snippet\"")
+		if snipStart < 0 {
+			break
+		}
+		html = html[snipStart:]
+		endTag := strings.Index(html, "</a>")
+		if endTag < 0 {
+			break
+		}
+		snippet := strings.TrimSpace(stripHTML(html[:endTag+4]))
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		results = append(results, snippet)
+		html = html[endTag+4:]
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil || len(result.Choices) == 0 {
-		log.Printf("ollama: parse failed: %v body=%s", err, string(respBody[:min(200, len(respBody))]))
-		return ""
+	return strings.Join(results, " | ")
+}
+
+func stripHTML(s string) string {
+	var buf strings.Builder
+	inTag := false
+	for _, c := range s {
+		if c == '<' {
+			inTag = true
+		} else if c == '>' {
+			inTag = false
+		} else if !inTag {
+			buf.WriteRune(c)
+		}
 	}
-	content := result.Choices[0].Message.Content
-	// Save assistant response to history
-	h.memoryStore.SaveMessage(sessionID, "assistant", content)
-	return content
+	return strings.Join(strings.Fields(buf.String()), " ")
 }
 
 func escapeJSON(s string) string {
