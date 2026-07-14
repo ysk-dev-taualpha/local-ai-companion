@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/audit"
@@ -53,7 +54,11 @@ func (l *Loop) Run(ctx context.Context, sessionID string, message string, reques
 	// Load history from memory store
 	var history []memory.Message
 	if l.memoryStore != nil {
-		history, _ = l.memoryStore.LoadHistory(sessionID)
+		var loadErr error
+		history, loadErr = l.memoryStore.LoadHistory(sessionID)
+		if loadErr != nil {
+			log.Printf("agent: LoadHistory failed: %v", loadErr)
+		}
 	}
 
 	messages := []Message{
@@ -97,7 +102,9 @@ func (l *Loop) Run(ctx context.Context, sessionID string, message string, reques
 			if msg.Content != "" {
 				// Save to memory
 				if l.memoryStore != nil {
-					l.memoryStore.SaveTurn(sessionID, message, msg.Content)
+					if saveErr := l.memoryStore.SaveTurn(sessionID, message, msg.Content); saveErr != nil {
+						log.Printf("agent: SaveTurn failed: %v", saveErr)
+					}
 				}
 				return msg.Content, nil
 			}

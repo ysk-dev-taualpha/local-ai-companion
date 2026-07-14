@@ -149,7 +149,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "text":
-			if h.memoryStore != nil || h.agentLoop != nil {
+			if h.agentLoop != nil {
 				go h.handleTextMessageAgent(conn, msg)
 			} else {
 				h.handleTextMessage(conn, msg)
@@ -243,6 +243,12 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 }
 
 func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestID string) {
+	if h.agentLoop == nil {
+		h.sendError(conn, requestID, "agent loop not available")
+		h.resetAndBroadcastIdle()
+		return
+	}
+
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
 
