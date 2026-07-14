@@ -120,14 +120,8 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse session ID from query param for history continuity across reconnects
-	sid := r.URL.Query().Get("session_id")
-	if sid == "" {
-		sid = newRequestID()
-	}
-
 	h.mu.Lock()
-	h.conns[conn] = &wsConnState{sessionID: sid}
+	h.conns[conn] = &wsConnState{sessionID: newRequestID()}
 	h.mu.Unlock()
 
 	defer func() {
@@ -241,6 +235,11 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	h.stateMu.Unlock()
 
 	go h.sendTTSSeparately(conn, requestID, assistant.Text)
+
+	h.stateMu.Lock()
+	_ = h.stateMachine.Transition(state.IDLE)
+	h.broadcastState("IDLE")
+	h.stateMu.Unlock()
 }
 
 func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestID string) {
@@ -290,6 +289,11 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 	h.stateMu.Unlock()
 
 	go h.sendTTSSeparately(conn, requestID, assistant.Text)
+
+	h.stateMu.Lock()
+	_ = h.stateMachine.Transition(state.IDLE)
+	h.broadcastState("IDLE")
+	h.stateMu.Unlock()
 }
 
 func (h *WebSocketHub) sendTTSSeparately(conn *websocket.Conn, requestID, text string) {
