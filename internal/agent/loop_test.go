@@ -153,7 +153,81 @@ func TestLoop_MultipleToolCalls(t *testing.T) {
 	}
 }
 
-// TestLoop_MaxLoopsExceeded verifies the loop returns an error when the model
+// TestLoop_ToolCallMessageFormat verifies that tool call messages use correct
+// Ollama native format: arguments as JSON objects, tool_name in tool results,
+// and assistant tool_calls preserved in history.
+func TestLoop_ToolCallMessageFormat(t *testing.T) {
+	// arguments as JSON object (not escaped string) — Ollama native format
+	responses := []string{
+		`{"model":"test-model","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"web_search","arguments":{"query":"golang testing"}}}]},"done":false}`,
+		`{"model":"test-model","message":{"role":"assistant","content":"Go testing is well-documented."},"done":true}`,
+	}
+	srv := newMockOllamaServer(t, responses)
+	defer srv.Close()
+
+	loop := newTestLoop(srv.URL, 3)
+	result, err := loop.Run(t.Context(), "sess-1", "search for golang testing", "req-1")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Go testing is well-documented." {
+		t.Errorf("result = %q", result)
+	}
+}
+
+// TestLoop_ToolCallHistoryPreservation sends a request through the mock server
+// and captures the intermediate messages sent to verify tool_name and tool_calls
+// are correctly formatted.
+func TestLoop_ToolCallHistoryPreservation(t *testing.T) {
+	var capturedBodies []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, 4096)
+		n, _ := r.Body.Read(body)
+		capturedBodies = append(capturedBodies, string(body[:n]))
+
+		w.Header().Set("Content-Type", "application/json")
+		// First call: model requests tool. Second call: final answer.
+		if len(capturedBodies) == 1 {
+			w.Write([]byte(`{"model":"test-model","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"web_search","arguments":{"query":"test"}}}]},"done":false}`))
+		} else {
+			w.Write([]byte(`{"model":"test-model","message":{"role":"assistant","content":"final answer"},"done":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	loop := newTestLoop(srv.URL, 3)
+	result, err := loop.Run(t.Context(), "sess-x", "search", "req-x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "final answer" {
+		t.Errorf("result = %q, want %q", result, "final answer")
+	}
+
+	// Verify first request: tools should use type/function wrapper
+	if len(capturedBodies) < 1 {
+		t.Fatal("no requests captured")
+	}
+	if !strings.Contains(capturedBodies[0], `"type":"function"`) {
+		t.Error("first request missing tool type wrapper")
+	}
+
+	// Verify second request: should contain tool result with tool_name
+	if len(capturedBodies) < 2 {
+		t.Fatal("only 1 request captured, expected 2")
+	}
+	if !strings.Contains(capturedBodies[1], `"tool_name"`) {
+		t.Error("second request missing tool_name in tool result")
+	}
+	if !strings.Contains(capturedBodies[1], `"role":"tool"`) {
+		t.Error("second request missing tool role message")
+	}
+	if !strings.Contains(capturedBodies[1], `"tool_calls"`) {
+		t.Error("second request missing assistant tool_calls in history")
+	}
+}
 // keeps requesting tool calls beyond the configured MaxToolLoops limit.
 func TestLoop_MaxLoopsExceeded(t *testing.T) {
 	// Every response has tool_calls — the model never gives a final answer.
