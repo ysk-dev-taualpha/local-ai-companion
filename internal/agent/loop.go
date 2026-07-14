@@ -95,9 +95,9 @@ func (l *Loop) Run(ctx context.Context, message string, requestID string) (strin
 				content = result.Error
 			}
 			messages = append(messages, Message{
-				Role:       "tool",
-				ToolCallID: tc.ID,
-				Content:    content,
+				Role:     "tool",
+				ToolName: tc.Name,
+				Content:  content,
 			})
 		}
 	}

@@ -26,11 +26,16 @@ func NewOllamaClient(baseURL, model string, timeout time.Duration) *OllamaClient
 	}
 }
 
+type toolDef struct {
+	Type     string          `json:"type"`
+	Function tool.Definition `json:"function"`
+}
+
 type chatRequest struct {
-	Model    string            `json:"model"`
-	Messages []chatMessage     `json:"messages"`
-	Tools    []tool.Definition `json:"tools,omitempty"`
-	Stream   bool              `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Tools    []toolDef     `json:"tools,omitempty"`
+	Stream   bool          `json:"stream"`
 }
 
 type chatMessage struct {
@@ -38,6 +43,7 @@ type chatMessage struct {
 	Content    string     `json:"content"`
 	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
 }
 
 type toolCall struct {
@@ -58,10 +64,14 @@ type chatResponse struct {
 }
 
 func (c *OllamaClient) Chat(ctx context.Context, messages []chatMessage, tools []tool.Definition) (*chatMessage, error) {
+	toolDefs := make([]toolDef, len(tools))
+	for i, t := range tools {
+		toolDefs[i] = toolDef{Type: "function", Function: t}
+	}
 	reqBody := chatRequest{
 		Model:    c.model,
 		Messages: messages,
-		Tools:    tools,
+		Tools:    toolDefs,
 		Stream:   false,
 	}
 
@@ -101,6 +111,7 @@ type Message struct {
 	Content    string
 	ToolCalls  []tool.Call
 	ToolCallID string
+	ToolName   string
 }
 
 func messageToChat(m Message) chatMessage {
@@ -121,7 +132,9 @@ func messageToChat(m Message) chatMessage {
 			}
 		}
 	}
-	if m.ToolCallID != "" {
+	if m.Role == "tool" {
+		cm.ToolName = m.ToolName
+	} else if m.ToolCallID != "" {
 		cm.ToolCallID = m.ToolCallID
 	}
 	return cm
@@ -132,6 +145,7 @@ func chatToMessage(cm chatMessage) Message {
 		Role:       cm.Role,
 		Content:    cm.Content,
 		ToolCallID: cm.ToolCallID,
+		ToolName:   cm.ToolName,
 	}
 	if len(cm.ToolCalls) > 0 {
 		m.ToolCalls = make([]tool.Call, len(cm.ToolCalls))
