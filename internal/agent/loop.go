@@ -97,7 +97,8 @@ func (l *Loop) Run(ctx context.Context, sessionID string, message string, reques
 			if msg.Content != "" {
 				// Save to memory
 				if l.memoryStore != nil {
-					l.memoryStore.SaveTurn(sessionID, message, msg.Content)
+					l.memoryStore.SaveMessage(sessionID, "user", message)
+					l.memoryStore.SaveMessage(sessionID, "assistant", msg.Content)
 				}
 				return msg.Content, nil
 			}

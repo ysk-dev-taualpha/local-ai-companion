@@ -13,12 +13,6 @@ type Message struct {
 	Content string
 }
 
-type ConversationTurn struct {
-	UserText      string
-	AssistantText string
-	CreatedAt     time.Time
-}
-
 type Store struct {
 	db        *sql.DB
 	maxTurns  int
@@ -108,89 +102,6 @@ func (s *Store) LoadHistory(sessionID string) ([]Message, error) {
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
-}
-
-func (s *Store) SaveTurn(sessionID, userText, assistantText string) error {
-	var maxTurn int
-	err := s.db.QueryRow(
-		"SELECT COALESCE(MAX(turn), -1) FROM session_history WHERE session_id=?",
-		sessionID,
-	).Scan(&maxTurn)
-	if err != nil {
-		return err
-	}
-
-	nextTurn := maxTurn/2 + 1
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Store user at even turn numbers, assistant at odd turn numbers
-	// to avoid primary key collision on (session_id, turn).
-	userTurn := nextTurn * 2
-	assistantTurn := nextTurn*2 + 1
-
-	_, err = s.db.Exec(
-		"INSERT OR REPLACE INTO session_history VALUES(?,?,?,?,?)",
-		sessionID, userTurn, "user", userText, now,
-	)
-	if err != nil {
-		return err
-	}
-
-	_, err = s.db.Exec(
-		"INSERT OR REPLACE INTO session_history VALUES(?,?,?,?,?)",
-		sessionID, assistantTurn, "assistant", assistantText, now,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Trim: keep last maxTurns turns (each turn = 2 messages)
-	cutoff := nextTurn - s.maxTurns
-	if cutoff >= 0 {
-		_, _ = s.db.Exec(
-			"DELETE FROM session_history WHERE session_id=? AND turn <= ?",
-			sessionID, cutoff*2+1,
-		)
-	}
-	return nil
-}
-
-func (s *Store) LoadTurns(sessionID string) ([]ConversationTurn, error) {
-	rows, err := s.db.Query(
-		"SELECT role, content, created_at FROM session_history WHERE session_id=? ORDER BY turn ASC, role ASC",
-		sessionID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var turns []ConversationTurn
-	var current *ConversationTurn
-	for rows.Next() {
-		var role, content, createdAt string
-		if err := rows.Scan(&role, &content, &createdAt); err != nil {
-			return nil, err
-		}
-		switch role {
-		case "user":
-			if current != nil {
-				turns = append(turns, *current)
-			}
-			t, _ := time.Parse(time.RFC3339, createdAt)
-			current = &ConversationTurn{UserText: content, CreatedAt: t}
-		case "assistant":
-			if current != nil {
-				current.AssistantText = content
-				turns = append(turns, *current)
-				current = nil
-			}
-		}
-	}
-	if current != nil {
-		turns = append(turns, *current)
-	}
-	return turns, rows.Err()
 }
 
 func (s *Store) CleanOldSessions(maxAge time.Duration) error {
