@@ -64,18 +64,10 @@ func main() {
 		logger.Info("TTS enabled: VOICEVOX at %s, speaker=%d", cfg.TTS.VoicevoxURL, cfg.TTS.SpeakerID)
 	}
 
-	memStore, err := memory.NewStore("file:conversation.db", 10)
-	if err != nil {
-		logger.Error("memory store unavailable: %v", err)
-	}
-	if memStore != nil {
-		_ = memStore.CleanOldSessions(24 * time.Hour)
-	}
-
 	// Agent tool calling setup
 	var agentLoop *agent.Loop
 	if cfg.Ollama.Enabled && cfg.Agent.Enabled {
-		agentLoop = setupAgent(cfg, memStore)
+		agentLoop = setupAgent(cfg)
 		logger.Info("Agent loop enabled: model=%s, max_loops=%d, tools=%v",
 			cfg.Ollama.Model, cfg.Agent.MaxToolLoops, cfg.Agent.AllowedTools)
 	}
@@ -86,6 +78,14 @@ func main() {
 		sttClient := stt.NewFasterWhisper(cfg.VoiceInput.STTServerURL, time.Duration(cfg.VoiceInput.STTTimeoutMs)*time.Millisecond)
 		vp = api.NewVoicePipeline(sttClient)
 		logger.Info("Voice input enabled: vad=%s, stt=%s", cfg.VoiceInput.VADURL, cfg.VoiceInput.STTServerURL)
+	}
+
+	memStore, err := memory.NewStore("file:conversation.db", 10)
+	if err != nil {
+		logger.Error("memory store unavailable: %v", err)
+	}
+	if memStore != nil {
+		_ = memStore.CleanOldSessions(24 * time.Hour)
 	}
 
 	wsHub := api.NewWebSocketHub(memStore, pythonClient, ttsClient, state.New(nil), cfg.Runtime.RequestTimeoutMs, cfg.WebSocket.AllowedOrigins, agentLoop, vp)
@@ -120,7 +120,7 @@ func main() {
 	}
 }
 
-func setupAgent(cfg *config.Config, memStore *memory.Store) *agent.Loop {
+func setupAgent(cfg *config.Config) *agent.Loop {
 	registry := tool.NewRegistry()
 
 	webSearch := tools.NewWebSearch(cfg.Agent.WebSearchURL, cfg.Agent.WebSearchAPIKeyEnv)
@@ -203,6 +203,5 @@ func setupAgent(cfg *config.Config, memStore *memory.Store) *agent.Loop {
 			Timezone: cfg.Agent.Timezone,
 			Locale:   cfg.Agent.Locale,
 		},
-		MemoryStore: memStore,
 	})
 }

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/audit"
-	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/memory"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tool"
 )
 
@@ -17,16 +16,14 @@ type Config struct {
 	OllamaTimeout time.Duration
 	SystemPrompt  string
 	RuntimeCtx    *RuntimeContext
-	MemoryStore   *memory.Store
 }
 
 type Loop struct {
-	client      *OllamaClient
-	executor    *tool.ExecutorService
-	registry    *tool.Registry
-	audit       *audit.Logger
-	config      Config
-	memoryStore *memory.Store
+	client   *OllamaClient
+	executor *tool.ExecutorService
+	registry *tool.Registry
+	audit    *audit.Logger
+	config   Config
 }
 
 func NewLoop(registry *tool.Registry, executor *tool.ExecutorService, auditLogger *audit.Logger, config Config) *Loop {
@@ -35,39 +32,22 @@ func NewLoop(registry *tool.Registry, executor *tool.ExecutorService, auditLogge
 		timeout = 60 * time.Second
 	}
 	return &Loop{
-		client:      NewOllamaClient(config.OllamaBaseURL, config.Model, timeout),
-		executor:    executor,
-		registry:    registry,
-		audit:       auditLogger,
-		config:      config,
-		memoryStore: config.MemoryStore,
+		client:   NewOllamaClient(config.OllamaBaseURL, config.Model, timeout),
+		executor: executor,
+		registry: registry,
+		audit:    auditLogger,
+		config:   config,
 	}
 }
 
-func (l *Loop) Run(ctx context.Context, sessionID string, message string, requestID string) (string, error) {
+func (l *Loop) Run(ctx context.Context, message string, requestID string) (string, error) {
 	maxLoops := l.config.MaxToolLoops
 	if maxLoops <= 0 {
 		maxLoops = 5
 	}
 
-	// Load history from memory store
-	var history []memory.Message
-	if l.memoryStore != nil {
-		history, _ = l.memoryStore.LoadHistory(sessionID)
-	}
-
 	messages := []Message{
 		{Role: "user", Content: message},
-	}
-
-	// Prepend history messages (user/assistant pairs) before the current message
-	if len(history) > 0 {
-		historyMsgs := make([]Message, 0, len(history))
-		for _, h := range history {
-			historyMsgs = append(historyMsgs, Message{Role: h.Role, Content: h.Content})
-		}
-		// Insert history before current user message
-		messages = append(historyMsgs, messages...)
 	}
 
 	if l.config.SystemPrompt != "" {
@@ -95,11 +75,6 @@ func (l *Loop) Run(ctx context.Context, sessionID string, message string, reques
 
 		if len(msg.ToolCalls) == 0 {
 			if msg.Content != "" {
-				// Save to memory
-				if l.memoryStore != nil {
-					l.memoryStore.SaveMessage(sessionID, "user", message)
-					l.memoryStore.SaveMessage(sessionID, "assistant", msg.Content)
-				}
 				return msg.Content, nil
 			}
 			return "", fmt.Errorf("agent: empty response from model")
