@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -20,11 +18,6 @@ import (
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/state"
 	"github.com/ysk-dev-taualpha/local-ai-companion/runtime/internal/tts"
 )
-
-const voiceSystemPrompt = `あなたは常駐型AIアシスタントです。応答は短く簡潔に3文以内で、必ず以下のJSON形式で返してください:
-{"text": "返答本文", "emotion": "neutral", "motion": "nod", "speak_style": "normal", "interruptible": true}
-emotion: neutral/happy/sad/surprised/thinking, motion: nod/idle/wave
-Web検索結果を要約する場合は特に簡潔にまとめてください。`
 
 func buildCheckOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	if len(allowedOrigins) == 0 {
@@ -156,7 +149,7 @@ func (h *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "text":
-			if h.agentLoop != nil {
+			if h.memoryStore != nil || h.agentLoop != nil {
 				go h.handleTextMessageAgent(conn, msg)
 			} else {
 				h.handleTextMessage(conn, msg)
@@ -205,7 +198,16 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 	h.broadcastState("THINKING")
 	h.stateMu.Unlock()
 
-	responseText := h.callOllama(h.sessionID(conn), msg.Payload, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	sessionID := h.sessionID(conn)
+	responseText, err := h.agentLoop.Run(ctx, sessionID, msg.Payload, requestID)
+	if err != nil {
+		h.sendError(conn, requestID, "LLM error: "+err.Error())
+		h.resetAndBroadcastIdle()
+		return
+	}
 	if responseText == "" {
 		h.sendError(conn, requestID, "LLM returned empty response")
 		h.resetAndBroadcastIdle()
@@ -244,7 +246,16 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
 
-	responseText := h.callOllama(h.sessionID(conn), text, voiceSystemPrompt)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	sessionID := h.sessionID(conn)
+	responseText, err := h.agentLoop.Run(ctx, sessionID, text, requestID)
+	if err != nil {
+		h.sendError(conn, requestID, "LLM error: "+err.Error())
+		h.resetAndBroadcastIdle()
+		return
+	}
 	if responseText == "" {
 		h.sendError(conn, requestID, "LLM returned empty response")
 		h.resetAndBroadcastIdle()
@@ -277,168 +288,6 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 	_ = h.stateMachine.Transition(state.IDLE)
 	h.broadcastState("IDLE")
 	h.stateMu.Unlock()
-}
-
-func (h *WebSocketHub) callOllama(sessionID, prompt, systemPrompt string) string {
-	// Load conversation history
-	history, _ := h.memoryStore.LoadHistory(sessionID)
-	h.memoryStore.SaveMessage(sessionID, "user", prompt)
-
-	// Build messages
-	type msg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	messages := []msg{}
-	if systemPrompt != "" {
-		messages = append(messages, msg{"system", systemPrompt})
-	}
-	for _, m := range history {
-		messages = append(messages, msg{m.Role, m.Content})
-	}
-	messages = append(messages, msg{"user", fmt.Sprintf("[現在日時: %s]\n%s", time.Now().Format("2006年1月2日 15時04分"), prompt)})
-
-	// First call: with tools
-	tools := `[{"type":"function","function":{"name":"search_the_web","description":"Search the web for current information","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}}}]`
-
-	msgsJSON, _ := json.Marshal(messages)
-	body := fmt.Sprintf(`{"model":"g4v100","messages":%s,"tools":%s,"stream":false}`, string(msgsJSON), tools)
-	
-	result := h.ollamaRequest(body)
-	if result.content == "" {
-		return ""
-	}
-
-	// Check for tool call
-	if result.toolName == "search_the_web" {
-		searchResult := webSearch(result.toolArgs)
-		if searchResult == "" {
-			return result.content
-		}
-		// Feed tool result back
-		messages = append(messages, msg{"assistant", ""}) // placeholder
-		messages = append(messages, msg{"tool", fmt.Sprintf(`{"query":"%s","results":"%s"}`, escapeJSON(result.toolArgs), escapeJSON(searchResult))})
-		msgsJSON2, _ := json.Marshal(messages)
-		body2 := fmt.Sprintf(`{"model":"g4v100","messages":%s,"stream":false}`, string(msgsJSON2))
-		content := h.ollamaRequest(body2).content
-		h.memoryStore.SaveMessage(sessionID, "assistant", content)
-		return content
-	}
-
-	h.memoryStore.SaveMessage(sessionID, "assistant", result.content)
-	return result.content
-}
-
-type ollamaResult struct {
-	content  string
-	toolName string
-	toolArgs string
-}
-
-func (h *WebSocketHub) ollamaRequest(body string) ollamaResult {
-	req, _ := http.NewRequest("POST", "http://192.168.12.107:11434/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("ollama: request failed: %v", err)
-		return ollamaResult{}
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
-	var r struct {
-		Choices []struct {
-			Message struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &r); err != nil || len(r.Choices) == 0 {
-		log.Printf("ollama: parse failed: %v body=%s", err, string(respBody[:min(200, len(respBody))]))
-		return ollamaResult{}
-	}
-
-	or := ollamaResult{content: r.Choices[0].Message.Content}
-	if len(r.Choices[0].Message.ToolCalls) > 0 {
-		tc := r.Choices[0].Message.ToolCalls[0]
-		or.toolName = tc.Function.Name
-		or.toolArgs = tc.Function.Arguments
-	}
-	return or
-}
-
-func webSearch(query string) string {
-	if query == "" {
-		return ""
-	}
-	encoded := url.QueryEscape(query)
-	req, _ := http.NewRequest("GET", "https://html.duckduckgo.com/html/?q="+encoded, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32768))
-	// Simple extraction: find result snippets
-	html := string(body)
-	var results []string
-	for i := 0; i < 3; i++ {
-		snipStart := strings.Index(html, "result__snippet\"")
-		if snipStart < 0 {
-			break
-		}
-		html = html[snipStart:]
-		endTag := strings.Index(html, "</a>")
-		if endTag < 0 {
-			break
-		}
-		snippet := strings.TrimSpace(stripHTML(html[:endTag+4]))
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
-		results = append(results, snippet)
-		html = html[endTag+4:]
-	}
-	return strings.Join(results, " | ")
-}
-
-func stripHTML(s string) string {
-	var buf strings.Builder
-	inTag := false
-	for _, c := range s {
-		if c == '<' {
-			inTag = true
-		} else if c == '>' {
-			inTag = false
-		} else if !inTag {
-			buf.WriteRune(c)
-		}
-	}
-	return strings.Join(strings.Fields(buf.String()), " ")
-}
-
-func escapeJSON(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b[1 : len(b)-1])
 }
 
 func (h *WebSocketHub) sendTTSSeparately(conn *websocket.Conn, requestID, text string) {
