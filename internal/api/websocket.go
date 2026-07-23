@@ -78,13 +78,13 @@ type WSStateNotification struct {
 
 type wsConnState struct {
 	writeMu   sync.Mutex
+	mu        sync.Mutex // per-session agent lock (replaces global agentMu)
 	sessionID string
 }
 
 type WebSocketHub struct {
 	mu               sync.RWMutex
 	stateMu          sync.Mutex
-	agentMu          sync.Mutex
 	conns            map[*websocket.Conn]*wsConnState
 	memoryStore      *memory.Store
 	pythonClient     PythonClient
@@ -184,8 +184,14 @@ func (h *WebSocketHub) handleTextMessageAgent(conn *websocket.Conn, msg WSMessag
 		requestID = newRequestID()
 	}
 
-	h.agentMu.Lock()
-	defer h.agentMu.Unlock()
+	h.mu.RLock()
+	cs := h.conns[conn]
+	h.mu.RUnlock()
+	if cs == nil {
+		return
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
 
 	h.stateMu.Lock()
 	if err := h.stateMachine.Transition(state.LISTENING); err != nil {
@@ -250,8 +256,14 @@ func (h *WebSocketHub) HandleVoiceTextAgent(conn *websocket.Conn, text, requestI
 		return
 	}
 
-	h.agentMu.Lock()
-	defer h.agentMu.Unlock()
+	h.mu.RLock()
+	cs := h.conns[conn]
+	h.mu.RUnlock()
+	if cs == nil {
+		return
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
