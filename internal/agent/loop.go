@@ -12,7 +12,7 @@ import (
 )
 
 type Config struct {
-	MaxToolLoops  int
+	MaxToolLoops  int // max LLM call iterations (including tool-call loops)
 	OllamaBaseURL string
 	Model         string
 	OllamaTimeout time.Duration
