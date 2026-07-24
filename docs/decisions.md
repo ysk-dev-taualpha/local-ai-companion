@@ -28,7 +28,7 @@ Decision:
 
 - Unity owns display, input, character control, subtitles, lip sync, and animation.
 - Go owns the long-running runtime, communication, concurrency, cancellation, external API gateway behavior, logging, and process supervision.
-- Python owns LLM, STT, TTS, RAG, prompt logic, and ML-oriented processing.
+- Python owns LLM, TTS, RAG, prompt logic, VAD, and ML-oriented processing.
 
 Reason:
 

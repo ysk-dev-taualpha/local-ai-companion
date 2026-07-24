@@ -128,31 +128,38 @@ func (s *Store) SaveTurn(sessionID, userText, assistantText string) error {
 	userTurn := nextTurn * 2
 	assistantTurn := nextTurn*2 + 1
 
-	_, err = s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("memory: begin transaction: %w", err)
+	}
+	defer tx.Rollback() // no-op after Commit
+
+	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO session_history VALUES(?,?,?,?,?)",
 		sessionID, userTurn, "user", userText, now,
-	)
-	if err != nil {
-		return err
+	); err != nil {
+		return fmt.Errorf("memory: insert user: %w", err)
 	}
 
-	_, err = s.db.Exec(
+	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO session_history VALUES(?,?,?,?,?)",
 		sessionID, assistantTurn, "assistant", assistantText, now,
-	)
-	if err != nil {
-		return err
+	); err != nil {
+		return fmt.Errorf("memory: insert assistant: %w", err)
 	}
 
 	// Trim: keep last maxTurns turns (each turn = 2 messages)
 	cutoff := nextTurn - s.maxTurns
 	if cutoff >= 0 {
-		_, _ = s.db.Exec(
+		if _, err := tx.Exec(
 			"DELETE FROM session_history WHERE session_id=? AND turn <= ?",
 			sessionID, cutoff*2+1,
-		)
+		); err != nil {
+			return fmt.Errorf("memory: trim: %w", err)
+		}
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 func (s *Store) LoadTurns(sessionID string) ([]ConversationTurn, error) {
