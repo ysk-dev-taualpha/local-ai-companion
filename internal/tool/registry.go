@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -50,6 +51,7 @@ func (r *Registry) Definitions() []Definition {
 	for name := range r.tools {
 		names = append(names, name)
 	}
+	sort.Strings(names) // deterministic order for cache-friendly prompts
 	r.defs = make([]Definition, len(names))
 	for i, name := range names {
 		r.defs[i] = r.tools[name].Def

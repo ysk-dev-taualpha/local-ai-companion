@@ -144,7 +144,7 @@ Unity Character
 
 ## v0.5: Voice Input
 
-v0.5 では音声入力（Voice Input）を導入。Unity でキャプチャしたマイク音声を WebSocket 経由で Go Runtime にストリーミングし、Python AI Service で VAD（Voice Activity Detection）判定と STT（Speech-to-Text）変換を行う。認識テキストは既存の会話フローに統合される。
+v0.5 では音声入力（Voice Input）を導入。Unity でキャプチャしたマイク音声を WebSocket 経由で Go Runtime にストリーミングし、Python AI Service で VAD（Voice Activity Detection）判定を行う。STT（Speech-to-Text）変換は Go Runtime が WinPC 上の faster-whisper サーバーを呼び出して実行する。認識テキストは既存の会話フローに統合される。
 
 ### v0.5 Data Flow
 

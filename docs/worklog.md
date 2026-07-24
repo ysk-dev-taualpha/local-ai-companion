@@ -26,13 +26,13 @@
 - [ ] Codex レビュー #7: 細部（MaxToolLoops, ツール一覧ソート）
 
 ### v0.5 残作業
-- [ ] TBD: docs: v0.5 STT 担当を Go に変更
-- [ ] TBD: fix: STT multipart フィールド名を `file` に統一
-- [ ] TBD: fix: STT レスポンスに duration フィールド追加
-- [ ] TBD: refactor: Python STT クライアント削除
-- [ ] TBD: docs: API 契約の不整合を修正
-- [ ] #114: speech_end → STT → LLM → TTS フロー統合
-- [ ] #115: Unity 認識テキスト表示 + 送信前キャンセル
+- [x] TBD: refactor: Python STT クライアント削除
+- [x] TBD: docs: API 契約の不整合を修正
+- [x] TBD: docs: v0.5 STT 担当を Go に変更 (architecture.md, decisions.md)
+- [x] TBD: fix: STT multipart フィールド名を `file` に統一
+- [x] TBD: fix: STT レスポンスに duration フィールド追加
+- [x] #114: speech_end → STT → LLM → TTS フロー統合 (voice.go)
+- [ ] #115: Unity 認識テキスト表示 + 送信前キャンセル (Go側済、Unity側手動)
 
 ### 環境メモ
 - ThinkPad X1C6: Go 1.26.4, Hermes CLI
